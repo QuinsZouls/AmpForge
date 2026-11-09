@@ -1,5 +1,12 @@
 #include "JackIo.hpp"
 
+// For DISTRHO_PLUGIN_NAME: the standalone's JACK client name is whatever DPF
+// passes to jack_client_open(), i.e. the plugin name. Hard-coding "AmpForge"
+// here would silently stop matching the day the plugin is renamed.
+// This header is pure #define's, so it pulls in no DPF dependency (in
+// particular not DistrhoUI.hpp, which this translation unit never sees).
+#include "DistrhoPluginInfo.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -10,6 +17,10 @@
 
 #if defined(__linux__)
 # include <dlfcn.h>
+// ::getpid(), needed to tell our own JACK client apart from another
+// process's client that happens to carry the same name (see J2 note in
+// Impl::pluginClientName()).
+# include <unistd.h>
 #endif
 
 // Why this file never includes <jack/jack.h> nor links libjack: the UI
@@ -80,23 +91,26 @@ constexpr const char* kAuxClientName = "AmpForge-IO";
 constexpr const char* kAudioPortType = "32 bit float mono audio";
 constexpr const char* kStandaloneInputPort  = "audio_in_1";
 constexpr const char* kStandaloneOutputPort = "audio_out_1";
-constexpr const char* kDpfClientName = "AmpForge";
+// The name DPF's standalone gives its JACK client is the plugin name.
+constexpr const char* kDpfClientName = DISTRHO_PLUGIN_NAME;
 
 // Opaque JACK types: we only ever hand these pointers back to libjack.
 struct jack_client_t;
 struct jack_port_t;
 
 // C-ABI entry points, resolved with dlsym(). Enums are passed as int and
-// flags as unsigned long, matching the C prototypes exactly.
+// flags as unsigned long, matching the C prototypes exactly - including the
+// const-ness of every pointer argument and of the port pointer itself, so
+// these signatures really are the ones declared in <jack/jack.h>.
 typedef jack_client_t* (*JackClientOpenFn)(const char*, int, int*, ...);
 typedef int            (*JackClientCloseFn)(jack_client_t*);
-typedef char*          (*JackGetClientNameFn)(jack_client_t*);
+typedef int            (*JackGetClientPidFn)(const char*);
 typedef const char**   (*JackGetPortsFn)(jack_client_t*, const char*, const char*, unsigned long);
 typedef jack_port_t*   (*JackPortByNameFn)(jack_client_t*, const char*);
-typedef const char*    (*JackPortNameFn)(jack_port_t*);
-typedef unsigned long  (*JackPortFlagsFn)(jack_port_t*);
-typedef const char*    (*JackPortTypeFn)(jack_port_t*);
-typedef const char**   (*JackPortGetAllConnectionsFn)(jack_client_t*, jack_port_t*);
+typedef const char*    (*JackPortNameFn)(const jack_port_t*);
+typedef int            (*JackPortFlagsFn)(const jack_port_t*);
+typedef const char*    (*JackPortTypeFn)(const jack_port_t*);
+typedef const char**   (*JackPortGetAllConnectionsFn)(const jack_client_t*, const jack_port_t*);
 typedef int            (*JackConnectFn)(jack_client_t*, const char*, const char*);
 typedef int            (*JackDisconnectFn)(jack_client_t*, const char*, const char*);
 typedef unsigned int   (*JackGetSampleRateFn)(jack_client_t*);
@@ -127,11 +141,15 @@ struct JackIo::Impl
 {
     void* lib = nullptr;
     bool libTried = false;
+    // True only once every *required* symbol resolved. The handle alone is
+    // not proof of a usable library: a libjack that dlopen()s fine but lacks
+    // one entry point must never be reported as ready, or the callers run
+    // straight into a null function pointer.
+    bool libOk = false;
     std::string error;
 
     JackClientOpenFn           clientOpen = nullptr;
     JackClientCloseFn          clientClose = nullptr;
-    JackGetClientNameFn        getClientName = nullptr;
     JackGetPortsFn             getPorts = nullptr;
     JackPortByNameFn           portByName = nullptr;
     JackPortNameFn             portName = nullptr;
@@ -144,6 +162,9 @@ struct JackIo::Impl
     JackGetBufferSizeFn        getBufferSize = nullptr;
     JackFreeFn                 freeMem = nullptr;
     JackOnShutdownFn           onShutdown = nullptr;
+    // Optional: older/embedded JACK servers may not export it. Its absence
+    // disables the PID cross-check below, nothing else.
+    JackGetClientPidFn         getClientPid = nullptr;
 
     jack_client_t* client = nullptr;
 
@@ -151,8 +172,10 @@ struct JackIo::Impl
     // thread - so it is the only thing that callback is allowed to touch.
     std::atomic<bool> serverDown{false};
 
-    // pluginClient() is called a handful of times per repaint; walking the
-    // whole graph each time is wasteful, so the answer is memoised here.
+    // Walking the whole graph is far too expensive to redo on a mouse move,
+    // and pluginClientName() is reached from the mouse handlers and from the
+    // startup poll in uiIdle() (never from a paint pass), so the answer is
+    // memoised here.
     mutable std::string cachedPluginClient;
 
     ~Impl();
@@ -164,22 +187,32 @@ struct JackIo::Impl
         static_cast<std::atomic<bool>*>(arg)->store(true);
     }
 
+    // required=false keeps the symbol out of ensureLibrary()'s success
+    // condition and leaves the previous error text alone: a missing optional
+    // entry point degrades one feature, it does not make libjack unusable.
     template<typename Fn>
-    bool resolveSymbol(const char* name, Fn& out)
+    bool resolveSymbol(const char* name, Fn& out, bool required = true)
     {
         out = reinterpret_cast<Fn>(reinterpret_cast<uintptr_t>(::dlsym(lib, name)));
         if (out != nullptr)
             return true;
-        error = std::string("libjack is missing the symbol '") + name + "'";
+        if (required)
+            error = std::string("libjack is missing the symbol '") + name + "'";
         return false;
     }
 
     bool ensureLibrary()
     {
-        if (lib != nullptr)
+        // The handle is not the answer: lib is set as soon as dlopen()
+        // succeeds, so a library that resolved only half of its entry points
+        // would otherwise wave the caller through to a null pointer.
+        if (libOk)
             return true;
         // A missing libjack is a permanent condition for this process; don't
-        // retry a failing dlopen() from every repaint.
+        // retry a failing dlopen() from every UI interaction. Same for a
+        // library that failed to resolve: dlopen() is not attempted a second
+        // time, the (still valid) handle is reused as a plain memory
+        // reference.
         if (libTried)
             return false;
         libTried = true;
@@ -197,9 +230,8 @@ struct JackIo::Impl
         // Note: the handle is deliberately never dlclose()d. DPF's own
         // standalone client keeps the same library mapped for the whole
         // process lifetime, so unloading it here would be pointless at best.
-        return resolveSymbol("jack_client_open", clientOpen)
+        libOk = resolveSymbol("jack_client_open", clientOpen)
             && resolveSymbol("jack_client_close", clientClose)
-            && resolveSymbol("jack_get_client_name", getClientName)
             && resolveSymbol("jack_get_ports", getPorts)
             && resolveSymbol("jack_port_by_name", portByName)
             && resolveSymbol("jack_port_name", portName)
@@ -212,6 +244,13 @@ struct JackIo::Impl
             && resolveSymbol("jack_get_buffer_size", getBufferSize)
             && resolveSymbol("jack_free", freeMem)
             && resolveSymbol("jack_on_shutdown", onShutdown);
+        if (!libOk)
+            return false;
+
+        // Optional, resolved last and outside the condition above: when it is
+        // missing we fall back to matching on the port name alone.
+        resolveSymbol("jack_get_client_pid", getClientPid, false);
+        return true;
     }
 
     void closeClient()
@@ -313,7 +352,31 @@ struct JackIo::Impl
         return true;
     }
 
-    // The DPF standalone's client, or "" when we're not running standalone.
+    // True when `owner` is a JACK client of *this* process.
+    //
+    // A matching name and port are not enough to conclude "we are the
+    // standalone": this UI also ships inside LV2/VST3/CLAP, so a plugin
+    // loaded in a DAW sees the standalone's client 'AmpForge' on the very
+    // same graph - and would happily rewrite its routing and its
+    // ~/.config/ampforge/audio_io.txt. Two standalone instances collide the
+    // same way. The owning PID is what actually answers "is that mine?".
+    //
+    // When the server cannot tell (older JACK builds do not export the
+    // symbol), we keep the pre-PID behaviour and match on the name. A
+    // *resolved* symbol answering 0 means "unknown owner" (in practice a
+    // client that just vanished, or a server that does not track pids), and
+    // that is never our own PID: an owner we cannot prove is ours is treated
+    // as somebody else's, so we never reroute a graph that is not provably
+    // our own.
+    bool isClientOfThisProcess(const std::string& owner)
+    {
+        if (getClientPid == nullptr)
+            return true;
+        return getClientPid(owner.c_str()) == static_cast<int>(::getpid());
+    }
+
+    // The DPF client owned by this process, or "" when we're not the
+    // standalone (running inside a DAW, or no such client at all).
     std::string pluginClientName()
     {
         if (client == nullptr)
@@ -321,11 +384,13 @@ struct JackIo::Impl
 
         if (!cachedPluginClient.empty())
         {
-            // The cached name goes stale when the standalone exits. One
-            // jack_port_by_name() probe is much cheaper than re-walking the
-            // graph, and it answers exactly that question.
+            // The cached name goes stale when the standalone exits, or when
+            // another process grabs the freed name. One jack_port_by_name()
+            // probe is much cheaper than re-walking the graph, and the PID
+            // re-check keeps the memoised name honest.
             const std::string probe = cachedPluginClient + ":" + kStandaloneInputPort;
-            if (portByName(client, probe.c_str()) != nullptr)
+            if (portByName(client, probe.c_str()) != nullptr
+                && isClientOfThisProcess(cachedPluginClient))
                 return cachedPluginClient;
             cachedPluginClient.clear();
         }
@@ -346,9 +411,14 @@ struct JackIo::Impl
                     continue;
                 // DPF passes the plugin name as the client name; a second
                 // instance gets a "-01"/"-02" suffix added by JACK.
-                if (owner == kDpfClientName
-                    || owner.compare(0, std::string(kDpfClientName).size() + 1, std::string(kDpfClientName) + "-") == 0)
-                    found = owner;
+                if (owner != kDpfClientName
+                    && owner.compare(0, std::string(kDpfClientName).size() + 1, std::string(kDpfClientName) + "-") != 0)
+                    continue;
+                // Cheap name test passed: only now pay for the round trip
+                // that proves the client belongs to us.
+                if (!isClientOfThisProcess(owner))
+                    continue;
+                found = owner;
             }
             freePortList(ports);
         }
@@ -362,7 +432,7 @@ struct JackIo::Impl
         std::vector<JackIo::JackPortInfo> unphysical;
         std::vector<JackIo::JackPortInfo> physical;
         if (!ensureOpen())
-            return unphysical;
+            return std::vector<JackIo::JackPortInfo>();
 
         const std::string self = pluginClientName();
         const char** ports = getPorts(client, nullptr, kAudioPortType, flags);
@@ -399,15 +469,21 @@ struct JackIo::Impl
             freePortList(ports);
         }
 
-        // Physical ports first: the graph is full of monitors and effect
-        // loops (Easy Effects etc.) that a guitarist never wants to pick,
-        // while the real interface is exactly the physical set. Only when
-        // there is no physical port at all (no soundcard, a pure virtual
-        // setup) do we expose everything.
-        std::vector<JackIo::JackPortInfo>& selected = physical.empty() ? unphysical : physical;
-        std::sort(selected.begin(), selected.end(),
-                  [](const JackIo::JackPortInfo& a, const JackIo::JackPortInfo& b) { return a.name < b.name; });
-        return selected;
+        // Physical (device) ports first, then the virtual ones, each block
+        // sorted by name. Nothing is hidden: the real interface is the
+        // physical set and belongs at the top, but Easy Effects, OBS,
+        // monitor_* sinks and net/jacktrip bridges are legitimate targets
+        // too. Dropping them also used to turn a perfectly valid saved route
+        // into "(not found)" the moment a USB interface was plugged in.
+        const auto byName = [](const JackIo::JackPortInfo& a, const JackIo::JackPortInfo& b) { return a.name < b.name; };
+        std::sort(physical.begin(), physical.end(), byName);
+        std::sort(unphysical.begin(), unphysical.end(), byName);
+
+        std::vector<JackIo::JackPortInfo> all;
+        all.reserve(physical.size() + unphysical.size());
+        all.insert(all.end(), physical.begin(), physical.end());
+        all.insert(all.end(), unphysical.begin(), unphysical.end());
+        return all;
     }
 };
 
@@ -522,6 +598,13 @@ bool JackIo::setInput(const std::string& port)
     return impl->makeConnection(port, inputPort);
 }
 
+// Contract (deliberate, also spelled out in JackIo.hpp):
+//   l empty           -> everything is disconnected and `r` is IGNORED. A
+//                        right channel alone is not a pair, so there is
+//                        nothing to connect; passing a stale output_r along
+//                        with an empty output_l must not resurrect it.
+//   r empty, r == l   -> one mono connection to `l`.
+//   otherwise         -> two connections, `l` and `r`.
 bool JackIo::setOutputs(const std::string& l, const std::string& r)
 {
     impl->error.clear();
@@ -540,6 +623,7 @@ bool JackIo::setOutputs(const std::string& l, const std::string& r)
     if (!impl->clearConnections(outputPort, true))
         return false;
 
+    // No left channel means no pair: `r` is dropped on purpose, see above.
     if (l.empty())
         return true;
 
@@ -683,17 +767,24 @@ AudioIoConfig loadAudioIoConfig()
     return config;
 }
 
-void saveAudioIoConfig(const AudioIoConfig& config)
+bool saveAudioIoConfig(const AudioIoConfig& config)
 {
     const std::string path = getAudioIoConfigPath();
     std::ofstream f(path, std::ios::trunc);
     if (!f.is_open())
-        return;
+        return false;
 
     f << "# AmpForge audio I/O - written by the plugin; edit while the plugin is closed.\n"
       << "input=" << config.input << "\n"
       << "output_l=" << config.outputL << "\n"
       << "output_r=" << config.outputR << "\n";
+
+    // A full disk or a quota is only reported once the buffer is flushed, so
+    // close() and check before claiming success: the caller has to be able
+    // to say "could not save" instead of a "Connected" that vanishes on the
+    // next start.
+    f.close();
+    return !f.fail();
 }
 
 } // namespace ampforge
