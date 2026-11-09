@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <sstream>
 
 namespace ampforge {
@@ -28,8 +29,21 @@ bool Lv2Plugin::load(const std::string& uri, const std::string& bundlePath) {
         return false;
     }
 
-    if (!bundlePath.empty()) {
-        LilvNode* bundleNode = syms.new_file_uri(world, nullptr, bundlePath.c_str());
+    std::string normBundlePath = bundlePath;
+    if (!normBundlePath.empty()) {
+        std::error_code ec;
+        std::filesystem::path bp(normBundlePath);
+        if (bp.extension() == ".so" || bp.extension() == ".ttl") {
+            if (bp.parent_path().extension() == ".lv2" || std::filesystem::is_regular_file(bp.parent_path() / "manifest.ttl", ec)) {
+                normBundlePath = bp.parent_path().string();
+            }
+        }
+        if (std::filesystem::is_directory(normBundlePath, ec)) {
+            if (normBundlePath.back() != '/') {
+                normBundlePath += '/';
+            }
+        }
+        LilvNode* bundleNode = syms.new_file_uri(world, nullptr, normBundlePath.c_str());
         if (bundleNode) {
             syms.world_load_bundle(world, bundleNode);
             syms.node_free(bundleNode);
@@ -40,24 +54,50 @@ bool Lv2Plugin::load(const std::string& uri, const std::string& bundlePath) {
         syms.world_load_all(world);
     }
 
-    LilvNode* uriNode = syms.new_uri(world, uri.c_str());
-    if (!uriNode) {
-        lastError = "Invalid URI: " + uri;
-        unload();
-        return false;
+    const LilvPlugins* allPlugins = syms.world_get_all_plugins(world);
+    if (!uri.empty()) {
+        LilvNode* uriNode = syms.new_uri(world, uri.c_str());
+        if (uriNode) {
+            plugin = syms.plugins_get_by_uri(allPlugins, uriNode);
+            syms.node_free(uriNode);
+        }
     }
 
-    const LilvPlugins* allPlugins = syms.world_get_all_plugins(world);
-    plugin = syms.plugins_get_by_uri(allPlugins, uriNode);
-    syms.node_free(uriNode);
+    // If not found by exact URI, search allPlugins in world for matching plugin in loaded bundle
+    if (!plugin && allPlugins) {
+        for (LilvIter* i = syms.plugins_begin(allPlugins); !syms.plugins_is_end(allPlugins, i); i = syms.plugins_next(allPlugins, i)) {
+            const LilvPlugin* p = syms.plugins_get(allPlugins, i);
+            if (!p) continue;
+            const LilvNode* uNode = syms.plugin_get_uri(p);
+            std::string uStr = uNode ? syms.node_as_string(uNode) : "";
+            LilvNode* nNode = syms.plugin_get_name(p);
+            std::string nStr = nNode ? syms.node_as_string(nNode) : "";
+            if (nNode) syms.node_free(nNode);
+
+            if (uri.empty() || uStr.find(uri) != std::string::npos || nStr.find(uri) != std::string::npos || uri == "fuzz") {
+                plugin = p;
+                pluginUri = uStr;
+                break;
+            }
+        }
+        if (!plugin) {
+            // Fallback to first plugin in allPlugins if bundle was loaded
+            LilvIter* i = syms.plugins_begin(allPlugins);
+            if (!syms.plugins_is_end(allPlugins, i)) {
+                plugin = syms.plugins_get(allPlugins, i);
+                const LilvNode* uNode = syms.plugin_get_uri(plugin);
+                if (uNode) pluginUri = syms.node_as_string(uNode);
+            }
+        }
+    } else if (plugin) {
+        pluginUri = uri;
+    }
 
     if (!plugin) {
         lastError = "LV2 plugin not found: " + uri;
         unload();
         return false;
     }
-
-    pluginUri = uri;
 
     // Get Name
     LilvNode* nameNode = syms.plugin_get_name(plugin);

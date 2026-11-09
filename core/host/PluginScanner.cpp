@@ -143,19 +143,27 @@ std::vector<PluginDescriptor> PluginScanner::scanPath(const std::string& path) {
         return {};
     }
 
-    const uint64_t mtime = getMtime(path);
-    auto it = cache.find(path);
-    if (it != cache.end() && it->second.fileMtime == mtime) {
-        if (it->second.scanFailed) {
-            return {};
+    std::string normPath = path;
+    std::filesystem::path pp(normPath);
+    if (pp.extension() == ".ttl" || pp.extension() == ".so") {
+        if (pp.parent_path().extension() == ".lv2" || std::filesystem::is_regular_file(pp.parent_path() / "manifest.ttl", ec)) {
+            normPath = pp.parent_path().string();
+            pp = std::filesystem::path(normPath);
         }
-        return { it->second.desc };
+    }
+
+    const uint64_t mtime = getMtime(normPath);
+    auto it = cache.find(normPath);
+    if (it != cache.end() && it->second.fileMtime == mtime) {
+        if (!it->second.scanFailed) {
+            return { it->second.desc };
+        }
     }
 
     // Determine format from extension or inspection
     PluginFormat fmt = PluginFormat::Unknown;
-    std::string ext = std::filesystem::path(path).extension().string();
-    if (ext == ".lv2" || std::filesystem::is_regular_file(std::filesystem::path(path) / "manifest.ttl", ec)) {
+    std::string ext = pp.extension().string();
+    if (ext == ".lv2" || std::filesystem::is_regular_file(pp / "manifest.ttl", ec)) {
         fmt = PluginFormat::LV2;
     } else if (ext == ".vst3") {
         fmt = PluginFormat::VST3;
@@ -166,20 +174,20 @@ std::vector<PluginDescriptor> PluginScanner::scanPath(const std::string& path) {
         fmt = PluginFormat::VST3;
     }
 
-    std::vector<PluginDescriptor> results = scanPluginFile(path, fmt);
+    std::vector<PluginDescriptor> results = scanPluginFile(normPath, fmt);
 
     if (results.empty()) {
         CachedPluginEntry failedEntry;
         failedEntry.fileMtime = mtime;
         failedEntry.scanFailed = true;
-        cache[path] = failedEntry;
+        cache[normPath] = failedEntry;
     } else {
         for (const auto& desc : results) {
             CachedPluginEntry entry;
             entry.desc = desc;
             entry.fileMtime = mtime;
             entry.scanFailed = false;
-            cache[path] = entry;
+            cache[normPath] = entry;
         }
     }
 
@@ -197,7 +205,14 @@ std::vector<PluginDescriptor> PluginScanner::scanPluginFile(const std::string& p
             const auto& syms = loader.syms();
             LilvWorld* world = syms.world_new();
             if (world) {
-                LilvNode* bundle = syms.new_file_uri(world, nullptr, path.c_str());
+                std::string bundlePathStr = path;
+                std::error_code ec;
+                if (std::filesystem::is_directory(bundlePathStr, ec)) {
+                    if (!bundlePathStr.empty() && bundlePathStr.back() != '/') {
+                        bundlePathStr += '/';
+                    }
+                }
+                LilvNode* bundle = syms.new_file_uri(world, nullptr, bundlePathStr.c_str());
                 if (bundle) {
                     syms.world_load_bundle(world, bundle);
                     syms.node_free(bundle);

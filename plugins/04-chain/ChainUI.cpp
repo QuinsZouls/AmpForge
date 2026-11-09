@@ -1802,7 +1802,17 @@ protected:
 
         if (std::strcmp(key, kPluginSelectFileStateKey) == 0 && value[0] != '\0')
         {
-            const std::string pickedPath = value;
+            std::string pickedPath = value;
+            std::error_code ec;
+            std::filesystem::path pp(pickedPath);
+            if (pp.extension() == ".ttl" || pp.extension() == ".so")
+            {
+                if (pp.parent_path().extension() == ".lv2" || std::filesystem::is_regular_file(pp.parent_path() / "manifest.ttl", ec))
+                {
+                    pickedPath = pp.parent_path().string();
+                }
+            }
+
             ampforge::PluginScanner scanner;
             auto descs = scanner.scanPath(pickedPath);
             ampforge::PluginDescriptor desc;

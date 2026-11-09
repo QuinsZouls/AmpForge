@@ -1835,6 +1835,19 @@ protected:
         if (fmt == ampforge::PluginFormat::Unknown)
             return;
 
+        if (fmt == ampforge::PluginFormat::LV2 && !pluginSlots[s].path.empty())
+        {
+            std::filesystem::path pp(pluginSlots[s].path);
+            std::error_code ec;
+            if (pp.extension() == ".ttl" || pp.extension() == ".so")
+            {
+                if (pp.parent_path().extension() == ".lv2" || std::filesystem::is_regular_file(pp.parent_path() / "manifest.ttl", ec))
+                {
+                    pluginSlots[s].path = pp.parent_path().string();
+                }
+            }
+        }
+
         auto p = ampforge::PluginScanner::instantiate(fmt, pluginSlots[s].path, pluginSlots[s].id);
         if (p)
         {

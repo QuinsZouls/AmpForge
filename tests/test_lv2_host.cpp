@@ -67,4 +67,13 @@ AMPFORGE_TEST(lv2_loader_and_gain_plugin_test)
     CHECK_NEAR(nodeBuf[1], -0.6f, 1e-5f);
     CHECK_NEAR(nodeBuf[2], 1.5f, 1e-5f);
     CHECK_NEAR(nodeBuf[3], -2.4f, 1e-5f);
+
+    // Test bundle loading without trailing slash and with empty URI
+    std::string noSlash = TEST_LV2_BUNDLE_DIR;
+    while (!noSlash.empty() && noSlash.back() == '/') noSlash.pop_back();
+
+    auto lv2NoSlash = std::make_unique<ampforge::Lv2Plugin>();
+    CHECK(lv2NoSlash->load("", noSlash));
+    CHECK(lv2NoSlash->getName() == "AmpForge Test Gain");
+    CHECK(lv2NoSlash->getParameterCount() == 1);
 }
