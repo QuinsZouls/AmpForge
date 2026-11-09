@@ -44,10 +44,15 @@
 #include "ExciterBlock.hpp"
 #include "EffectChain.hpp"
 #include "PitchDetector.hpp"
+#include "PluginNodeBlock.hpp"
+#include "host/PluginScanner.hpp"
+#include "host/HostedPluginProvider.hpp"
+#include "extra/Base64.hpp"
 #include <cmath>
 #include <cstring>
 #include <string>
 #include <chrono>
+#include <sstream>
 
 START_NAMESPACE_DISTRHO
 
@@ -65,11 +70,11 @@ static constexpr float kInputMeterDecayMs = 250.0f;
 static constexpr float kCpuMeterDecayTauSec = 0.5f;
 
 
-class ChainPlugin : public Plugin
+class ChainPlugin : public Plugin, public ampforge::HostedPluginProvider
 {
 public:
     ChainPlugin()
-        : Plugin(kParamCount, kProgramCount, 3) // states: Cabinet IR file path, preset-import file path, NAM model file path
+        : Plugin(kParamCount, kProgramCount, 3 + kPluginSlotCount * 5)
     {
         gateBlock.setThresholdDB(-50.0f);
         gateBlock.setAttackMs(5.0f);
@@ -197,6 +202,12 @@ public:
         chain.addBlock(&delayBlock, 16);
         chain.addBlock(&reverbBlock, 17);
         chain.addBlock(&eqBlock, 18);
+        for (int s = 0; s < kPluginSlotCount; ++s)
+        {
+            pluginNodes[s].setName("Plugin " + std::to_string(s + 1));
+            chain.addBlock(&pluginNodes[s], 19 + s);
+            chain.setEnabled(&pluginNodes[s], false);
+        }
         chain.rebuildOrder();
 
         // Amp starts on and un-bypassed (ampOn=true, ampBypass=false above),
@@ -252,7 +263,22 @@ public:
         doublerBlock.setSampleRate(initialSampleRate);
         harmonizerBlock.setSampleRate(initialSampleRate);
         exciterBlock.setSampleRate(initialSampleRate);
+        for (int s = 0; s < kPluginSlotCount; ++s)
+            pluginNodes[s].setSampleRate(initialSampleRate);
         tunerDetector.setSampleRate(initialSampleRate);
+    }
+
+    ampforge::HostedPlugin* getHostedPlugin(int slot) override
+    {
+        if (slot >= 0 && slot < kPluginSlotCount)
+            return pluginNodes[slot].getActivePlugin();
+        return nullptr;
+    }
+
+    void enqueuePluginParam(int slot, uint32_t paramId, float value) override
+    {
+        if (slot >= 0 && slot < kPluginSlotCount)
+            pluginNodes[slot].enqueueParameterUpdate(paramId, value);
     }
 
 protected:
@@ -929,6 +955,60 @@ protected:
             parameter.ranges.def = 0.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 1.0f;
             break;
         }
+
+        if (index >= kParamPlugin1On && index <= kParamPlugin4Macro8)
+        {
+            const int s = static_cast<int>(index - kParamPlugin1On) / 14;
+            const int sub = static_cast<int>(index - kParamPlugin1On) % 14;
+            const std::string prefix = "Plugin " + std::to_string(s + 1) + " ";
+            const std::string symPrefix = "plugin_" + std::to_string(s + 1) + "_";
+
+            switch (sub)
+            {
+            case 0:
+                parameter.hints |= kParameterIsBoolean;
+                parameter.name = (prefix + "On").c_str();
+                parameter.symbol = (symPrefix + "on").c_str();
+                parameter.ranges.def = 0.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 1.0f;
+                break;
+            case 1:
+                parameter.hints |= kParameterIsInteger;
+                parameter.name = (prefix + "Position").c_str();
+                parameter.symbol = (symPrefix + "position").c_str();
+                parameter.ranges.def = 19.0f + static_cast<float>(s); parameter.ranges.min = 0.0f; parameter.ranges.max = 25.0f;
+                break;
+            case 2:
+                parameter.hints |= kParameterIsBoolean;
+                parameter.name = (prefix + "Bypass").c_str();
+                parameter.symbol = (symPrefix + "bypass").c_str();
+                parameter.ranges.def = 0.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 1.0f;
+                break;
+            case 3:
+                parameter.name = (prefix + "Mix").c_str();
+                parameter.symbol = (symPrefix + "mix").c_str();
+                parameter.ranges.def = 1.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 1.0f;
+                break;
+            case 4:
+                parameter.name = (prefix + "In Trim").c_str();
+                parameter.symbol = (symPrefix + "in_trim").c_str();
+                parameter.unit = "dB";
+                parameter.ranges.def = 0.0f; parameter.ranges.min = -24.0f; parameter.ranges.max = 24.0f;
+                break;
+            case 5:
+                parameter.name = (prefix + "Out Trim").c_str();
+                parameter.symbol = (symPrefix + "out_trim").c_str();
+                parameter.unit = "dB";
+                parameter.ranges.def = 0.0f; parameter.ranges.min = -24.0f; parameter.ranges.max = 24.0f;
+                break;
+            default: {
+                const int m = sub - 6;
+                parameter.name = (prefix + "Macro " + std::to_string(m + 1)).c_str();
+                parameter.symbol = (symPrefix + "macro_" + std::to_string(m + 1)).c_str();
+                parameter.ranges.def = 0.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 1.0f;
+                break;
+            }
+            }
+        }
     }
 
     float getParameterValue(uint32_t index) const override
@@ -1090,7 +1170,23 @@ protected:
         case kParamNamMix:          return namMix;
         case kParamNamBypass:       return namBypass ? 1.0f : 0.0f;
 
-        default: return 0.0f;
+        default:
+            if (index >= kParamPlugin1On && index <= kParamPlugin4Macro8)
+            {
+                const int s = static_cast<int>(index - kParamPlugin1On) / 14;
+                const int sub = static_cast<int>(index - kParamPlugin1On) % 14;
+                switch (sub)
+                {
+                case 0: return pluginSlots[s].on ? 1.0f : 0.0f;
+                case 1: return pluginSlots[s].position;
+                case 2: return pluginSlots[s].bypass ? 1.0f : 0.0f;
+                case 3: return pluginSlots[s].mix;
+                case 4: return pluginSlots[s].inTrim;
+                case 5: return pluginSlots[s].outTrim;
+                default: return pluginSlots[s].macros[sub - 6];
+                }
+            }
+            return 0.0f;
         }
     }
 
@@ -1390,6 +1486,56 @@ protected:
         case kParamNamBypass:
             namBypass = value > 0.5f; chain.setEnabled(&namBlock, namOn && !namBypass); break;
         }
+
+        if (index >= kParamPlugin1On && index <= kParamPlugin4Macro8)
+        {
+            const int s = static_cast<int>(index - kParamPlugin1On) / 14;
+            const int sub = static_cast<int>(index - kParamPlugin1On) % 14;
+            switch (sub)
+            {
+            case 0:
+                pluginSlots[s].on = value > 0.5f;
+                chain.setEnabled(&pluginNodes[s], pluginSlots[s].on && !pluginSlots[s].bypass);
+                break;
+            case 1:
+                pluginSlots[s].position = value;
+                chain.setPosition(&pluginNodes[s], static_cast<int>(std::round(value)));
+                break;
+            case 2:
+                pluginSlots[s].bypass = value > 0.5f;
+                pluginNodes[s].setBypass(pluginSlots[s].bypass);
+                chain.setEnabled(&pluginNodes[s], pluginSlots[s].on && !pluginSlots[s].bypass);
+                break;
+            case 3:
+                pluginSlots[s].mix = value;
+                pluginNodes[s].setMix(value);
+                break;
+            case 4:
+                pluginSlots[s].inTrim = value;
+                pluginNodes[s].setInputTrim(value);
+                break;
+            case 5:
+                pluginSlots[s].outTrim = value;
+                pluginNodes[s].setOutputTrim(value);
+                break;
+            default: {
+                const int m = sub - 6;
+                pluginSlots[s].macros[m] = value;
+                const uint32_t mappedParamId = pluginSlots[s].macroMap[m];
+                if (mappedParamId != 0xFFFFFFFF)
+                {
+                    ampforge::HostedPlugin* p = pluginNodes[s].getActivePlugin();
+                    if (p)
+                    {
+                        ampforge::PluginParamInfo info = p->getParameterInfo(mappedParamId);
+                        float realVal = info.minValue + value * (info.maxValue - info.minValue);
+                        pluginNodes[s].enqueueParameterUpdate(mappedParamId, realVal);
+                    }
+                }
+                break;
+            }
+            }
+        }
     }
 
     void sampleRateChanged(double newSampleRate) override
@@ -1419,6 +1565,8 @@ protected:
         doublerBlock.setSampleRate(newSampleRate);
         harmonizerBlock.setSampleRate(newSampleRate);
         exciterBlock.setSampleRate(newSampleRate);
+        for (int s = 0; s < kPluginSlotCount; ++s)
+            pluginNodes[s].setSampleRate(newSampleRate);
         tunerDetector.setSampleRate(newSampleRate);
 
         // The Cabinet block resamples its IR to whatever sample rate was
@@ -1487,6 +1635,43 @@ protected:
             state.hints = kStateIsFilenamePath;
             state.defaultValue = "";
         }
+        else if (index >= 3 && index < 3 + kPluginSlotCount * 5)
+        {
+            const uint32_t pIdx = index - 3;
+            const int s = static_cast<int>(pIdx / 5);
+            const int kind = static_cast<int>(pIdx % 5);
+            if (kind == 0)
+            {
+                state.key = kPluginPathStateKeys[s];
+                state.label = "Plugin Path";
+                state.hints = kStateIsFilenamePath;
+                state.defaultValue = "";
+            }
+            else if (kind == 1)
+            {
+                state.key = kPluginIdStateKeys[s];
+                state.label = "Plugin ID";
+                state.defaultValue = "";
+            }
+            else if (kind == 2)
+            {
+                state.key = kPluginFormatStateKeys[s];
+                state.label = "Plugin Format";
+                state.defaultValue = "";
+            }
+            else if (kind == 3)
+            {
+                state.key = kPluginMapStateKeys[s];
+                state.label = "Plugin Macro Map";
+                state.defaultValue = "";
+            }
+            else if (kind == 4)
+            {
+                state.key = kPluginBlobStateKeys[s];
+                state.label = "Plugin State Blob";
+                state.defaultValue = "";
+            }
+        }
     }
 
     // Called by the host when it wants to persist our state (saving a
@@ -1497,6 +1682,33 @@ protected:
             return String(cabinetIRPath.c_str());
         if (std::strcmp(key, kNamModelStateKey) == 0)
             return String(namModelPath.c_str());
+
+        for (int s = 0; s < kPluginSlotCount; ++s)
+        {
+            if (std::strcmp(key, kPluginPathStateKeys[s]) == 0)
+                return String(pluginSlots[s].path.c_str());
+            if (std::strcmp(key, kPluginIdStateKeys[s]) == 0)
+                return String(pluginSlots[s].id.c_str());
+            if (std::strcmp(key, kPluginFormatStateKeys[s]) == 0)
+                return String(pluginSlots[s].format.c_str());
+            if (std::strcmp(key, kPluginMapStateKeys[s]) == 0)
+                return String(pluginSlots[s].mapJson.c_str());
+            if (std::strcmp(key, kPluginBlobStateKeys[s]) == 0)
+            {
+                ampforge::HostedPlugin* p = const_cast<ampforge::PluginNodeBlock&>(pluginNodes[s]).getActivePlugin();
+                if (p)
+                {
+                    std::string raw = p->saveState();
+                    if (!raw.empty())
+                    {
+                        String b64 = String::asBase64(raw.data(), raw.size());
+                        const_cast<PluginSlotState&>(pluginSlots[s]).stateBlob = b64.buffer();
+                    }
+                }
+                return String(pluginSlots[s].stateBlob.c_str());
+            }
+        }
+
         return String();
     }
 
@@ -1520,46 +1732,134 @@ protected:
                 updateStateValue(key, value);
                 suppressingStatePush = false;
             }
+            return;
         }
         else if (std::strcmp(key, kNamModelStateKey) == 0)
         {
-            // Only adopt the new path on an actual successful load - on
-            // failure, NamBlock keeps whatever was loaded before untouched
-            // (see its own comment), so namModelPath (what getState()
-            // reports for session-saving) needs to keep matching that,
-            // rather than pointing at a file that was never actually
-            // adopted.
-            //
-            // Architecture info is derived by ChainUI reading the .nam file
-            // itself client-side (see readNamArchitecture() in ChainUI.cpp)
-            // rather than us parsing and pushing it - but ChainUI still
-            // needs to hear that kNamModelStateKey *changed* at all in order
-            // to trigger that read, and DPF's own file-browser glue only
-            // delivers that "for free" when the pick went through DPF's
-            // in-process fallback dialog. When a host instead handles
-            // UI::requestStateFile() with its own native picker (VST3/CLAP
-            // have no such path in this project's vendored DPF, but LV2
-            // hosts like Carla do via the request_value extension), the
-            // chosen path reaches setState() here via the host's own
-            // patch:Set relay - DPF's LV2 backend has that message handling
-            // path (lv2_work()) but deliberately leaves the matching "tell
-            // the UI" step commented out (FIXME: "host should be
-            // responsible for updating UI side, not us") - and evidently
-            // not every host actually does that job, so the sidebar was
-            // left permanently stuck on "No model loaded" despite the DSP
-            // having loaded the model correctly (confirmed via Carla/LV2:
-            // audio changed, sidebar didn't). updateStateValue() is the
-            // supported way to push a value to the UI ourselves regardless
-            // of which path got us here - it's a safe no-op on VST3/CLAP
-            // (see UI::stateChanged()'s comment for why those two still
-            // need the client-side re-read instead), but on LV2/standalone
-            // it's exactly the missing notification.
             if (value[0] != '\0' && namBlock.loadModel(value))
             {
                 namModelPath = value;
                 suppressingStatePush = true;
                 updateStateValue(key, value);
                 suppressingStatePush = false;
+            }
+            return;
+        }
+
+        for (int s = 0; s < kPluginSlotCount; ++s)
+        {
+            if (std::strcmp(key, kPluginPathStateKeys[s]) == 0)
+            {
+                pluginSlots[s].path = value ? value : "";
+                loadHostedPlugin(s);
+                return;
+            }
+            if (std::strcmp(key, kPluginIdStateKeys[s]) == 0)
+            {
+                pluginSlots[s].id = value ? value : "";
+                loadHostedPlugin(s);
+                return;
+            }
+            if (std::strcmp(key, kPluginFormatStateKeys[s]) == 0)
+            {
+                pluginSlots[s].format = value ? value : "";
+                loadHostedPlugin(s);
+                return;
+            }
+            if (std::strcmp(key, kPluginMapStateKeys[s]) == 0)
+            {
+                pluginSlots[s].mapJson = value ? value : "";
+                parsePluginMap(s, pluginSlots[s].mapJson);
+                return;
+            }
+            if (std::strcmp(key, kPluginBlobStateKeys[s]) == 0)
+            {
+                pluginSlots[s].stateBlob = value ? value : "";
+                if (!pluginSlots[s].stateBlob.empty())
+                {
+                    ampforge::HostedPlugin* p = pluginNodes[s].getActivePlugin();
+                    if (p)
+                    {
+                        std::vector<uint8_t> chunk;
+                        d_getChunkFromBase64String_impl(chunk, pluginSlots[s].stateBlob.c_str());
+                        if (!chunk.empty())
+                        {
+                            std::string raw(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+                            p->loadState(raw);
+                        }
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    void loadHostedPlugin(int s)
+    {
+        if (pluginSlots[s].format.empty() || (pluginSlots[s].path.empty() && pluginSlots[s].id.empty()))
+            return;
+
+        ampforge::PluginFormat fmt = ampforge::PluginFormat::Unknown;
+        if (pluginSlots[s].format == "LV2") fmt = ampforge::PluginFormat::LV2;
+        else if (pluginSlots[s].format == "VST3") fmt = ampforge::PluginFormat::VST3;
+        else if (pluginSlots[s].format == "CLAP") fmt = ampforge::PluginFormat::CLAP;
+
+        if (fmt == ampforge::PluginFormat::Unknown)
+            return;
+
+        auto p = ampforge::PluginScanner::instantiate(fmt, pluginSlots[s].path, pluginSlots[s].id);
+        if (p)
+        {
+            if (!pluginSlots[s].stateBlob.empty())
+            {
+                std::vector<uint8_t> chunk;
+                d_getChunkFromBase64String_impl(chunk, pluginSlots[s].stateBlob.c_str());
+                if (!chunk.empty())
+                {
+                    std::string raw(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+                    p->loadState(raw);
+                }
+            }
+            pluginNodes[s].setName(p->getName());
+            pluginNodes[s].setPlugin(std::move(p));
+            applyMacroMappingsToPlugin(s);
+        }
+    }
+
+    void parsePluginMap(int s, const std::string& mapStr)
+    {
+        for (int m = 0; m < kPluginMacroCount; ++m)
+            pluginSlots[s].macroMap[m] = 0xFFFFFFFF;
+
+        if (mapStr.empty()) return;
+        std::istringstream ss(mapStr);
+        std::string pair;
+        while (std::getline(ss, pair, ','))
+        {
+            const auto colon = pair.find(':');
+            if (colon == std::string::npos) continue;
+            try {
+                int m = std::stoi(pair.substr(0, colon));
+                uint32_t pid = static_cast<uint32_t>(std::stoul(pair.substr(colon + 1)));
+                if (m >= 0 && m < kPluginMacroCount)
+                    pluginSlots[s].macroMap[m] = pid;
+            } catch (...) {}
+        }
+        applyMacroMappingsToPlugin(s);
+    }
+
+    void applyMacroMappingsToPlugin(int s)
+    {
+        ampforge::HostedPlugin* p = pluginNodes[s].getActivePlugin();
+        if (!p) return;
+        for (int m = 0; m < kPluginMacroCount; ++m)
+        {
+            uint32_t pid = pluginSlots[s].macroMap[m];
+            if (pid != 0xFFFFFFFF)
+            {
+                ampforge::PluginParamInfo info = p->getParameterInfo(pid);
+                float realVal = info.minValue + pluginSlots[s].macros[m] * (info.maxValue - info.minValue);
+                pluginNodes[s].enqueueParameterUpdate(pid, realVal);
             }
         }
     }
@@ -1599,8 +1899,10 @@ protected:
             if (tunerOn)
                 tunerDetector.pushSample(trimmed);
 
-            out[i] = chain.processSample(trimmed);
+            out[i] = trimmed;
         }
+
+        chain.processBlock(out, frames);
 
         if (tunerOn)
             tunerFrequency = tunerDetector.getFrequencyHz();
@@ -1830,6 +2132,27 @@ private:
     bool cabinetBypass = false;
     bool namBypass = false;
     bool ampBypass = false;
+
+    struct PluginSlotState {
+        bool on = false;
+        float position = 19.0f;
+        bool bypass = false;
+        float mix = 1.0f;
+        float inTrim = 0.0f;
+        float outTrim = 0.0f;
+        float macros[kPluginMacroCount] = {0.0f};
+        uint32_t macroMap[kPluginMacroCount] = {
+            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
+        };
+        std::string path;
+        std::string id;
+        std::string format;
+        std::string mapJson;
+        std::string stateBlob;
+    };
+    PluginSlotState pluginSlots[kPluginSlotCount];
+    ampforge::PluginNodeBlock pluginNodes[kPluginSlotCount];
 
     DISTRHO_DECLARE_NON_COPYABLE(ChainPlugin)
 };

@@ -1,6 +1,9 @@
 #include "test_harness.hpp"
 
 #include "EffectChain.hpp"
+#include "ScreamerBlock.hpp"
+#include "NoiseGateBlock.hpp"
+#include <cmath>
 
 /*
  * EffectChain is what makes runtime pedal reordering possible, so these
@@ -138,4 +141,85 @@ AMPFORGE_TEST(effect_chain_ignores_blocks_that_were_never_added)
     chain.setPosition(&stranger, 5);
 
     CHECK_NEAR(chain.processSample(1.0f), 2.0f, 1e-6f);
+}
+
+AMPFORGE_TEST(effect_chain_process_block_matches_process_sample_bit_for_bit)
+{
+    MultiplyBlock doubleIt1(2.0f);
+    AddBlock addOne1(1.0f);
+
+    ampforge::EffectChain chain1;
+    chain1.addBlock(&doubleIt1, 0);
+    chain1.addBlock(&addOne1, 1);
+    chain1.rebuildOrder();
+
+    MultiplyBlock doubleIt2(2.0f);
+    AddBlock addOne2(1.0f);
+
+    ampforge::EffectChain chain2;
+    chain2.addBlock(&doubleIt2, 0);
+    chain2.addBlock(&addOne2, 1);
+    chain2.rebuildOrder();
+
+    constexpr uint32_t kFrames = 256;
+    float inBuf[kFrames];
+    float sampleOut[kFrames];
+    float blockOut[kFrames];
+
+    for (uint32_t i = 0; i < kFrames; ++i)
+    {
+        inBuf[i] = std::sin(static_cast<float>(i) * 0.1f);
+        sampleOut[i] = chain1.processSample(inBuf[i]);
+        blockOut[i] = inBuf[i];
+    }
+
+    chain2.processBlock(blockOut, kFrames);
+
+    for (uint32_t i = 0; i < kFrames; ++i)
+    {
+        CHECK(sampleOut[i] == blockOut[i]);
+    }
+}
+
+AMPFORGE_TEST(effect_chain_stateful_dsp_process_block_matches_process_sample)
+{
+    ampforge::NoiseGateBlock gate1;
+    ampforge::ScreamerBlock screamer1;
+    gate1.setSampleRate(44100.0);
+    screamer1.setSampleRate(44100.0);
+
+    ampforge::EffectChain chain1;
+    chain1.addBlock(&gate1, 0);
+    chain1.addBlock(&screamer1, 1);
+    chain1.rebuildOrder();
+
+    ampforge::NoiseGateBlock gate2;
+    ampforge::ScreamerBlock screamer2;
+    gate2.setSampleRate(44100.0);
+    screamer2.setSampleRate(44100.0);
+
+    ampforge::EffectChain chain2;
+    chain2.addBlock(&gate2, 0);
+    chain2.addBlock(&screamer2, 1);
+    chain2.rebuildOrder();
+
+    constexpr uint32_t kFrames = 512;
+    float inBuf[kFrames];
+    float sampleOut[kFrames];
+    float blockOut[kFrames];
+
+    for (uint32_t i = 0; i < kFrames; ++i)
+    {
+        inBuf[i] = 0.5f * std::sin(static_cast<float>(i) * 0.05f);
+        sampleOut[i] = chain1.processSample(inBuf[i]);
+        blockOut[i] = inBuf[i];
+    }
+
+    chain2.processBlock(blockOut, kFrames);
+
+    for (uint32_t i = 0; i < kFrames; ++i)
+    {
+        // Must be bit-for-bit identical
+        CHECK(sampleOut[i] == blockOut[i]);
+    }
 }

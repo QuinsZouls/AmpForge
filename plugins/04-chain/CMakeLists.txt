@@ -1,13 +1,26 @@
 dpf_add_plugin(ampforge_main
-  TARGETS jack lv2 vst3 clap
+  TARGETS jack
   USE_FILE_BROWSER
   FILES_DSP
     ChainPlugin.cpp
+    ../../core/host/Lv2Plugin.cpp
+    ../../core/host/ClapPlugin.cpp
+    ../../core/host/Vst3Plugin.cpp
+    ../../core/host/PluginScanner.cpp
+    ${vst3_pluginterfaces_SOURCE_DIR}/base/funknown.cpp
   FILES_UI
     ChainUI.cpp
-    JackIo.cpp)
+    JackIo.cpp
+    PluginBrowserModal.cpp
+    PluginParamsModal.cpp)
 
-target_include_directories(ampforge_main PUBLIC "." "../../core")
+target_include_directories(ampforge_main PUBLIC
+  "."
+  "../../core"
+  "../../core/host"
+  "${clap_SOURCE_DIR}/include"
+  "${CMAKE_BINARY_DIR}/vst3_inc"
+  "${neuralampmodelercore_SOURCE_DIR}/Dependencies/nlohmann")
 
 # dpf_add_plugin() compiles FILES_DSP once into an ampforge_main-dsp target
 # that every format target (jack/lv2/vst3/clap) links against, so NAM only

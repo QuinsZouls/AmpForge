@@ -100,6 +100,15 @@ public:
         return x;
     }
 
+    void processBlock(float* buffer, uint32_t frames)
+    {
+        for (auto* slot : orderedSlots)
+        {
+            if (slot->enabled)
+                slot->block->processBlock(buffer, frames);
+        }
+    }
+
 private:
     std::vector<ChainSlot> slots;
     std::vector<ChainSlot*> orderedSlots;

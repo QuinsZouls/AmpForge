@@ -371,7 +371,91 @@ enum Parameters
     // curve is drawn from it too instead of from the UI's own guess.
     kParamSampleRate,
 
+    // External Plugin Slots (1 - 4)
+    // Slot 1
+    kParamPlugin1On,
+    kParamPlugin1Position,
+    kParamPlugin1Bypass,
+    kParamPlugin1Mix,
+    kParamPlugin1InTrim,
+    kParamPlugin1OutTrim,
+    kParamPlugin1Macro1,
+    kParamPlugin1Macro2,
+    kParamPlugin1Macro3,
+    kParamPlugin1Macro4,
+    kParamPlugin1Macro5,
+    kParamPlugin1Macro6,
+    kParamPlugin1Macro7,
+    kParamPlugin1Macro8,
+
+    // Slot 2
+    kParamPlugin2On,
+    kParamPlugin2Position,
+    kParamPlugin2Bypass,
+    kParamPlugin2Mix,
+    kParamPlugin2InTrim,
+    kParamPlugin2OutTrim,
+    kParamPlugin2Macro1,
+    kParamPlugin2Macro2,
+    kParamPlugin2Macro3,
+    kParamPlugin2Macro4,
+    kParamPlugin2Macro5,
+    kParamPlugin2Macro6,
+    kParamPlugin2Macro7,
+    kParamPlugin2Macro8,
+
+    // Slot 3
+    kParamPlugin3On,
+    kParamPlugin3Position,
+    kParamPlugin3Bypass,
+    kParamPlugin3Mix,
+    kParamPlugin3InTrim,
+    kParamPlugin3OutTrim,
+    kParamPlugin3Macro1,
+    kParamPlugin3Macro2,
+    kParamPlugin3Macro3,
+    kParamPlugin3Macro4,
+    kParamPlugin3Macro5,
+    kParamPlugin3Macro6,
+    kParamPlugin3Macro7,
+    kParamPlugin3Macro8,
+
+    // Slot 4
+    kParamPlugin4On,
+    kParamPlugin4Position,
+    kParamPlugin4Bypass,
+    kParamPlugin4Mix,
+    kParamPlugin4InTrim,
+    kParamPlugin4OutTrim,
+    kParamPlugin4Macro1,
+    kParamPlugin4Macro2,
+    kParamPlugin4Macro3,
+    kParamPlugin4Macro4,
+    kParamPlugin4Macro5,
+    kParamPlugin4Macro6,
+    kParamPlugin4Macro7,
+    kParamPlugin4Macro8,
+
     kParamCount
+};
+
+static constexpr int kPluginSlotCount = 4;
+static constexpr int kPluginMacroCount = 8;
+
+static const char* const kPluginPathStateKeys[kPluginSlotCount] = {
+    "plugin_0_path", "plugin_1_path", "plugin_2_path", "plugin_3_path"
+};
+static const char* const kPluginIdStateKeys[kPluginSlotCount] = {
+    "plugin_0_id", "plugin_1_id", "plugin_2_id", "plugin_3_id"
+};
+static const char* const kPluginFormatStateKeys[kPluginSlotCount] = {
+    "plugin_0_format", "plugin_1_format", "plugin_2_format", "plugin_3_format"
+};
+static const char* const kPluginMapStateKeys[kPluginSlotCount] = {
+    "plugin_0_map", "plugin_1_map", "plugin_2_map", "plugin_3_map"
+};
+static const char* const kPluginBlobStateKeys[kPluginSlotCount] = {
+    "plugin_0_blob", "plugin_1_blob", "plugin_2_blob", "plugin_3_blob"
 };
 
 // Tempo-sync note divisions, shared between the DSP side (ChainPlugin.cpp,

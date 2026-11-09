@@ -117,6 +117,10 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+            /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 
@@ -157,6 +161,10 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+            /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 
@@ -200,6 +208,10 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+            /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 };
