@@ -124,12 +124,25 @@ static constexpr float kAudioGearSize    = 30.0f;
 static constexpr float kAudioRowH        = 30.0f;
 static constexpr float kAudioRowGap      = 10.0f;
 static constexpr float kAudioLabelW      = 96.0f;
-// One row of an open port list, and how many of them fit before the list
-// says "+N more..." instead of growing any taller - a machine with several
-// soundcards and a couple of loopback devices easily enumerates 20+ ports,
-// and a list that long would cover the whole modal.
+// Width of the CPU readout's fixed block at the right end of the top bar.
+// Lives next to the gear geometry because the two are one layout decision:
+// drawCpuMeter() lays its dot+text out inside it and audioGearRect() parks the
+// gear button immediately left of it, so widening the meter can no longer have
+// the two overlap (that offset used to be a literal 76.0f in both places).
+static constexpr float kCpuMeterReservedW = 76.0f;
+// One row of an open port list, how many of them are on screen at a time, and
+// the thin strip reserved above and below them. A machine with several
+// soundcards plus a handful of loopback devices (Easy Effects, OBS, net/...)
+// easily enumerates 14-20 candidates, so the list is a *window* scrolled with
+// the wheel (see scrollAudioPortList()) rather than a fixed chunk cut off with
+// a "+N more..." row: that row was not clickable, which made everything past
+// the 8th port unreachable.
 static constexpr float kAudioDropdownRowH     = 26.0f;
 static constexpr int   kAudioDropdownMaxItems = 8;
+// Reserved unconditionally (not only when the list overflows) so the rows
+// don't shift under the pointer the moment a scroll starts. The "more ports
+// above/below" chevrons live here: they are decoration, never a row.
+static constexpr float kAudioListEdgeH        = 10.0f;
 
 // Double-clicking a knob opens the same exact-value editor a click on its
 // value chip does (see startKnobEdit()) - issue #4. Measured with
@@ -671,10 +684,16 @@ protected:
             {
                 audioIoRestoreTimer = 0.0f;
                 ++audioIoRestoreAttempts;
+                // Only a resolved restore forces a repaint: each attempt walks
+                // the whole graph (14-20 ports), and in a DAW - where
+                // isStandalone() never becomes true - this loop ran its 40
+                // attempts over 10s repainting every single tick for nothing.
                 if (attemptAudioIoRestore() || audioIoRestoreAttempts > 40)
+                {
                     audioIoRestoreDone = true;
+                    anyChanged = true;
+                }
             }
-            anyChanged = true;   // keep ticking until the restore resolves
         }
 
         const float dropdownTarget = presetDropdownOpen ? 1.0f : 0.0f;
@@ -751,6 +770,15 @@ protected:
             return true;
         }
 
+        // The modal owns every keystroke while it is up, exactly like it owns
+        // clicks (onMouse()) and keys (onKeyboard()). Nothing is typeable in
+        // here, so this only exists to keep a stray text event from reaching
+        // whatever is underneath - today unreachable (a click on the gear runs
+        // cancelKnobEdit() first), but the invariant should not live 350 lines
+        // away from the handler that would break it.
+        if (audioSettingsOpen)
+            return true;
+
         if (editingKnobPedal >= 0)
         {
             // Some hosts deliver Enter/Backspace/Escape only as text
@@ -824,7 +852,7 @@ protected:
             if (ev.press && ev.key == kKeyEscape)
             {
                 if (audioDropdownOpen != 0)
-                    audioDropdownOpen = 0;
+                    closeAudioPortList();
                 else
                     closeAudioSettings();
             }
@@ -969,7 +997,11 @@ protected:
 
         // --- Top bar gear: opens the Audio Settings modal. Tested after the
         // dropdown above (an open dropdown swallows/closes on the click
-        // first) and against the same rect drawAudioGearButton() paints. ---
+        // first) and against the same rect drawAudioGearButton() paints.
+        // Linux only: JackIo::available() is always false elsewhere, so the
+        // button would open a permanently empty "HOST" modal. See the same
+        // guard in drawTopBar(). ---
+#if defined(__linux__)
         {
             float gx, gy, gw, gh;
             audioGearRect(static_cast<float>(getWidth()), gx, gy, gw, gh);
@@ -979,6 +1011,7 @@ protected:
                 return true;
             }
         }
+#endif
 
         // --- Control bar (preset button / + New / Save) ---
         if (my >= kTopBarHeight && my < kTopBarHeight + kControlBarHeight)
@@ -1326,6 +1359,27 @@ protected:
 
     bool onScroll(const ScrollEvent& ev) override
     {
+        // The wheel is the one input the full-screen overlays used to leak:
+        // their key and click handlers swallow everything, but an ungated
+        // onScroll() scrolled the rack/palette *behind* the scrim. With the
+        // modal at 60% opacity the user can see the rack move and lands
+        // somewhere else entirely once it closes.
+        if (audioSettingsOpen)
+        {
+            // Wheel scrolls the open port list, never the rack behind the
+            // scrim. A positive delta is wheel-up on every backend we target
+            // (DGL normalises "one detent up" to +1 line), so it walks
+            // towards the start of the list.
+            const double dy = ev.delta.getY();
+            if (audioDropdownOpen != 0 && dy != 0.0)
+                scrollAudioPortList(dy > 0.0 ? -1 : +1);
+            return true;
+        }
+        // Same containment for the other full-screen overlays - their
+        // handlers already swallow clicks and keys.
+        if (savingPreset || paramValues[kParamTunerOn] > 0.5f)
+            return true;
+
         if (static_cast<float>(ev.pos.getX()) < kPaletteWidth)
         {
             const float contentHeight = paletteContentHeight();
@@ -2682,14 +2736,17 @@ private:
     }
 
     // The gear button lives at the right end of the top bar, immediately
-    // left of the CPU meter's fixed 76px block. Single source of truth: the
-    // same helper feeds both drawTopBar() and onMouse(), so the icon and its
-    // hit-test can never drift apart (see makeScrollbarGeom()'s comment for
-    // what duplicating a rect between draw and hit-test cost us before).
+    // left of the CPU meter's fixed kCpuMeterReservedW block. Single source of
+    // truth: the same helper feeds both drawTopBar() and onMouse(), so the
+    // icon and its hit-test can never drift apart (see
+    // makeScrollbarGeom()'s comment for what duplicating a rect between draw
+    // and hit-test cost us before). The two literals left below are the top
+    // bar's right margin (20, shared with drawCpuMeter()'s call site) and
+    // the 12px gap that keeps the gear's rounded plate off the meter's dot.
     void audioGearRect(float width, float& x, float& y, float& w, float& h) const
     {
         w = h = kAudioGearSize;
-        x = width - 20.0f - 76.0f - 12.0f - kAudioGearSize;
+        x = width - 20.0f - kCpuMeterReservedW - 12.0f - kAudioGearSize;
         y = (kTopBarHeight - kAudioGearSize) * 0.5f;
     }
 
@@ -2729,20 +2786,48 @@ private:
         y = boxY + 88.0f + static_cast<float>(which - 1) * (kAudioRowH + kAudioRowGap);
     }
 
-    // The open list, hanging under its control (overlays the modal body
-    // below). The 4px of padding above the first row and the 4 at the
-    // bottom are included in `h`; the row under the pointer is resolved as
-    // (my - y - 4) / kAudioDropdownRowH, matching that inset.
+    // Rows of an open list that are on screen at once - the window size, not
+    // the item count (see kAudioDropdownMaxItems).
+    static int audioVisibleRows(int itemCount)
+    {
+        return itemCount < kAudioDropdownMaxItems ? itemCount : kAudioDropdownMaxItems;
+    }
+
+    // The open list: a window of audioVisibleRows() rows that hangs under its
+    // control, or - when it doesn't fit under it - flips up and hangs over it.
+    // The first/last kAudioListEdgeH strips (the chevrons advertising that
+    // there is more above/below) and the row area in between are included in
+    // `h`; the row under the pointer is resolved as
+    // (my - y - kAudioListEdgeH) / kAudioDropdownRowH, matching that inset.
+    // `opensUp` is reported so drawAudioPortList() can flip the shadow with it.
     void audioListRect(float width, float height, int which, int itemCount,
-                       float& x, float& y, float& w, float& h) const
+                       float& x, float& y, float& w, float& h, bool& opensUp) const
     {
         float cx, cy, cw, ch;
         audioRowRect(width, height, which, cx, cy, cw, ch);
         x = cx;
-        y = cy + ch + 2.0f;
         w = cw;
-        const int visible = itemCount < kAudioDropdownMaxItems ? itemCount : kAudioDropdownMaxItems;
-        h = kAudioDropdownRowH * static_cast<float>(visible) + 8.0f;
+        h = kAudioDropdownRowH * static_cast<float>(audioVisibleRows(itemCount)) + 2.0f * kAudioListEdgeH;
+
+        // Opening downwards is the default, but with a short window
+        // (DISTRHO_UI_USER_RESIZABLE) the lower selectors left the last rows
+        // outside the framebuffer, where they aren't just invisible - they
+        // can't be clicked either, because DGL never delivers an event
+        // outside the widget. So flip up when there is room above and the
+        // list would overshoot the box it belongs to.
+        float boxX, boxY, boxW, boxH;
+        audioModalRect(width, height, boxX, boxY, boxW, boxH);
+        const float below = cy + ch + 2.0f;
+        const float above = cy - 2.0f - h;
+        opensUp = (below + h > boxY + boxH - 8.0f && above >= boxY + 8.0f);
+        y = opensUp ? above : below;
+
+        // The flip alone doesn't cover a window shrunk past the modal's own
+        // height (the box is then partly off-screen and there is no room on
+        // either side of the control), so as a last resort keep the whole list
+        // inside the widget. This can end up covering its own control - the
+        // alternative is rows that simply cannot be reached.
+        y = std::clamp(y, 2.0f, std::max(2.0f, height - 2.0f - h));
     }
 
     // The Refresh button + its row, between the selectors and the ENGINE
@@ -2780,6 +2865,14 @@ private:
         for (const ampforge::JackIo::JackPortInfo& port : ports)
             items.push_back(port.name);
         return items;
+    }
+
+    // Size of the list above without building it: the row loop, the hit-test
+    // and scrollAudioPortList() only need the count, and with 14-20
+    // candidates that was a pair of vector<string> per frame for nothing.
+    int audioSelectorItemCount(int which) const
+    {
+        return 1 + static_cast<int>(audioSelectorPorts(which).size());
     }
 
     // 0 = nothing selected, >0 = index into audioSelectorPorts() + 1, -1 =
@@ -2837,12 +2930,53 @@ private:
             audioIoConfig.outputR = value;
     }
 
+    // Closes the open list, if any, and rewinds it: the next list must open at
+    // its top row instead of wherever the previous one was scrolled to.
+    void closeAudioPortList()
+    {
+        audioDropdownOpen = 0;
+        audioListOffset   = 0;
+    }
+
+    // Scrolls the open list by `delta` rows, clamped to the window. Called
+    // from onScroll() (the wheel) - the list is the only part of the modal
+    // that scrolls.
+    void scrollAudioPortList(int delta)
+    {
+        if (audioDropdownOpen == 0 || delta == 0)
+            return;
+
+        const int n = audioSelectorItemCount(audioDropdownOpen);
+        const int maxOffset = std::max(0, n - kAudioDropdownMaxItems);
+        const int next = std::clamp(audioListOffset + delta, 0, maxOffset);
+        if (next == audioListOffset)
+            return;
+
+        audioListOffset = next;
+        repaint();
+    }
+
     // Applies one picker's value to the graph and to the config file. An
     // empty port means "disconnect" (see JackIo::setInput/setOutputs).
     void applyAudioSelection(int which, const std::string& port)
     {
         const std::string previous = audioConfigValue(which);
+        // Kept so the clear below can be undone if JACK refuses the change.
+        const std::string previousR = audioIoConfig.outputR;
+
+        // Output L and Output R are ONE object, not two independent settings:
+        // JackIo::setOutputs() takes the pair, and a right channel with no
+        // left is not a pair at all (setOutputs("") disconnects both). Leaving
+        // outputR behind would show "Output R: A:playback_FR" next to "No
+        // output connected", and the next start's restore - which only looks
+        // at outputL - would never redeem it, so the orphan would sit in the
+        // file forever.
+        if (which == 2 && port.empty())
+            audioIoConfig.outputR.clear();
+
         setAudioConfigValue(which, port);
+        // A pick ends the interaction with the list, so it also rewinds it.
+        closeAudioPortList();
 
         // setOutputs() takes the whole L/R pair, so audioIoConfig has to
         // already hold the new value when it is called - which is why the
@@ -2855,15 +2989,21 @@ private:
             // the click): put the previous pick back, otherwise the UI and
             // the file would keep advertising routing that isn't there.
             setAudioConfigValue(which, previous);
+            audioIoConfig.outputR = previousR;
             audioIoStatus = jackIo.lastError();
             audioIoStatusAlpha = 1.0f;
             repaint();
             return;
         }
 
-        ampforge::saveAudioIoConfig(audioIoConfig);
+        // A failed write (read-only HOME, full disk) must not be hidden behind
+        // a plain "Connected": the routing works right now but will be gone on
+        // the next start, and that is exactly what the user needs to know.
+        const bool saved = ampforge::saveAudioIoConfig(audioIoConfig);
         audioIoState = jackIo.queryState();
-        audioIoStatus = port.empty() ? "Disconnected" : "Connected";
+        audioIoStatus = !saved       ? "Connected (could not save config)"
+                        : port.empty() ? "Disconnected"
+                                       : "Connected";
         audioIoStatusAlpha = 1.0f;
         repaint();
     }
@@ -2871,13 +3011,23 @@ private:
     // Re-walks the JACK graph. Only called on modal open and on an explicit
     // Refresh click: enumerating ports is a few round trips to the server,
     // far too expensive for anything per-frame.
-    void refreshAudioPorts()
+    //
+    // `announce` controls the transient status line: opening the modal must
+    // not claim anything was refreshed (nothing was - the user would see
+    // "Ports refreshed" blink on every single open), a click on the button
+    // must.
+    void refreshAudioPorts(bool announce)
     {
         audioInputPorts  = jackIo.inputCandidates();
         audioOutputPorts = jackIo.outputCandidates();
         audioIoState     = jackIo.queryState();
-        audioIoStatus    = audioIoState.standalone ? "Ports refreshed" : "Not running standalone";
-        audioIoStatusAlpha = 1.0f;
+        // A shorter list can leave a stale window behind; start from the top.
+        audioListOffset  = 0;
+        if (announce)
+        {
+            audioIoStatus      = audioIoState.standalone ? "Ports refreshed" : "Not running standalone";
+            audioIoStatusAlpha = 1.0f;
+        }
         repaint();
     }
 
@@ -2961,7 +3111,10 @@ private:
                 audioIoConfig.outputL = l;
                 audioIoConfig.outputR = r;
                 jackIo.setOutputs(l, r);
-                ampforge::saveAudioIoConfig(audioIoConfig);
+                // Discarded on purpose: there is no status line to complain on
+                // yet (the modal isn't even built), and a read-only HOME must
+                // not stop the auto-routing from happening this session.
+                (void)ampforge::saveAudioIoConfig(audioIoConfig);
             }
         }
         else
@@ -2984,16 +3137,17 @@ private:
         audioSettingsOpen = true;
         // Enumerating here (rather than per frame) is what makes the pickers
         // and the ENGINE section reflect the real graph the moment the modal
-        // appears.
-        refreshAudioPorts();
+        // appears. Not announced: "Ports refreshed" blinking on every open
+        // would claim the user did something they didn't.
+        refreshAudioPorts(false);
     }
 
     void closeAudioSettings()
     {
         audioSettingsOpen = false;
-        // A list left open would be drawn again - already expanded - the
-        // next time the modal opens.
-        audioDropdownOpen = 0;
+        // A list left open would be drawn again - already expanded, and
+        // possibly scrolled - the next time the modal opens.
+        closeAudioPortList();
         repaint();
     }
 
@@ -3013,27 +3167,34 @@ private:
         if (audioDropdownOpen != 0)
         {
             const int openSelector = audioDropdownOpen;
-            const std::vector<std::string> items = audioSelectorItems(openSelector);
-            const int itemCount = static_cast<int>(items.size());
+            const int itemCount = audioSelectorItemCount(openSelector);
 
-            // 1a. Inside the list: pick that row (or "None") and close.
+            // 1a. Inside the list: pick that row (or "None") and close. The
+            // row under the pointer is a *window* row; the entry it stands for
+            // is audioListOffset + row (see scrollAudioPortList()).
             float listX, listY, listW, listH;
-            audioListRect(width, height, openSelector, itemCount, listX, listY, listW, listH);
+            bool opensUp = false;   // not needed to hit-test, see audioListRect()
+            audioListRect(width, height, openSelector, itemCount, listX, listY, listW, listH, opensUp);
             if (audioPointIn(mx, my, listX, listY, listW, listH))
             {
-                const int visible = itemCount < kAudioDropdownMaxItems ? itemCount : kAudioDropdownMaxItems;
-                const int row = static_cast<int>((my - listY - 4.0f) / kAudioDropdownRowH);
-                // The last visible row is "+N more..." when the list was cut
-                // off: a label, not an entry, so it selects nothing.
-                const bool isOverflowRow = (itemCount > kAudioDropdownMaxItems && row == visible - 1);
-                if (row >= 0 && row < visible && !isOverflowRow)
+                const int visible = audioVisibleRows(itemCount);
+                const int row = static_cast<int>((my - listY - kAudioListEdgeH) / kAudioDropdownRowH);
+                const int index = audioListOffset + row;
+                // The chevron strips above and below the rows are not rows:
+                // both land outside [0, visible) and pick nothing, which is
+                // also what keeps a click in those strips from doing anything.
+                if (row >= 0 && row < visible && index >= 0 && index < itemCount)
                 {
-                    if (row == 0)
+                    // The only place that needs the strings themselves - the
+                    // count above came from audioSelectorItemCount(), which
+                    // builds nothing.
+                    const std::vector<std::string> items = audioSelectorItems(openSelector);
+                    if (index == 0)
                         applyAudioSelection(openSelector, "");
-                    else if (row <= itemCount - 1)
-                        applyAudioSelection(openSelector, items[static_cast<std::size_t>(row)]);
+                    else
+                        applyAudioSelection(openSelector, items[static_cast<std::size_t>(index)]);
                 }
-                audioDropdownOpen = 0;
+                closeAudioPortList();
                 return;
             }
 
@@ -3042,14 +3203,14 @@ private:
             audioRowRect(width, height, openSelector, rowX, rowY, rowW, rowH);
             if (audioPointIn(mx, my, rowX, rowY, rowW, rowH))
             {
-                audioDropdownOpen = 0;
+                closeAudioPortList();
                 return;
             }
 
             // 1c. Anywhere else closes it and keeps going, so the same click
             // still reaches the X, the scrim, or another selector (switching
             // between two pickers should take one click, not two).
-            audioDropdownOpen = 0;
+            closeAudioPortList();
         }
 
         // 2. The close "X".
@@ -3081,17 +3242,28 @@ private:
             // Host-managed: the host owns the graph, the pickers are inert.
             if (!audioIoState.standalone)
                 return;
-            audioDropdownOpen = (audioDropdownOpen == which) ? 0 : which;
+            if (audioDropdownOpen == which)
+            {
+                closeAudioPortList();
+            }
+            else
+            {
+                audioDropdownOpen = which;
+                audioListOffset   = 0;  // every list opens at its top row
+            }
             return;
         }
 
-        // 5. Refresh.
+        // 5. Refresh. Always live: opening the modal before the startup poll
+        // resolved, or the server coming up/going away with the modal open,
+        // used to leave the button dead with no way back except closing and
+        // reopening. queryState() inside is what decides the outcome, and
+        // "Not running standalone" is the announcement for that.
         float refreshX, refreshY, refreshW, refreshH;
         audioRefreshRect(width, height, refreshX, refreshY, refreshW, refreshH);
         if (audioPointIn(mx, my, refreshX, refreshY, refreshW, refreshH))
         {
-            if (audioIoState.standalone)
-                refreshAudioPorts();
+            refreshAudioPorts(true);
             return;
         }
 
@@ -3348,7 +3520,13 @@ private:
         text(logoX + logoSize + 12.0f, kTopBarHeight * 0.5f, "AmpForge", nullptr);
         textLetterSpacing(0.0f);
 
+        // The gear only exists where it can do something: JackIo talks to
+        // libjack through dlopen() and is always unavailable on macOS/Windows,
+        // so there it would sit in the top bar opening a modal that can never
+        // list a port. Guarded together with its hit-test in onMouse().
+#if defined(__linux__)
         drawAudioGearButton(width);
+#endif
 
         drawCpuMeter(width - 20.0f, kTopBarHeight * 0.5f, displayValues[kParamCpuLoad]);
     }
@@ -3367,8 +3545,10 @@ private:
 
         // Fixed-width layout (dot, then "CPU xx%" text) rather than
         // measuring the text and working backwards from rightX - simpler,
-        // and immune to font-metric differences between platforms.
-        const float dotX = rightX - 66.0f;
+        // and immune to font-metric differences between platforms. The
+        // block's total width is kCpuMeterReservedW, which is also what
+        // audioGearRect() steps over to place the gear button.
+        const float dotX = rightX - (kCpuMeterReservedW - 10.0f);
         const float textX = dotX + 10.0f;
 
         beginPath();
@@ -4005,20 +4185,25 @@ private:
         restore();
     }
 
-    // The open list of selector `which` - a scroll-free popup of at most
-    // kAudioDropdownMaxItems rows, index 0 always being "(None)".
+    // The open list of selector `which` - a window of at most
+    // kAudioDropdownMaxItems rows (index 0 always being "(None)") starting at
+    // audioListOffset, scrolled by the wheel, hanging under its control or
+    // flipped up over it when there is no room below (see audioListRect()).
     void drawAudioPortList(float width, float height, int which)
     {
-        const int itemCount = static_cast<int>(audioSelectorItems(which).size());
+        const int itemCount = audioSelectorItemCount(which);
 
         float listX, listY, listW, listH;
-        audioListRect(width, height, which, itemCount, listX, listY, listW, listH);
+        bool opensUp = false;
+        audioListRect(width, height, which, itemCount, listX, listY, listW, listH, opensUp);
 
         // Same shadow/body recipe as drawPresetDropdown(), so every popup in
-        // this UI reads as the same surface.
+        // this UI reads as the same surface. The shadow falls away from the
+        // row the list hangs from (see `opensUp`), or a flipped-up list would
+        // look detached from its control.
         beginPath();
-        rect(listX - 20.0f, listY - 10.0f, listW + 40.0f, listH + 40.0f);
-        fillPaint(boxGradient(listX, listY + 4.0f, listW, listH, 6.0f, 16.0f,
+        rect(listX - 20.0f, listY - 20.0f, listW + 40.0f, listH + 40.0f);
+        fillPaint(boxGradient(listX, opensUp ? listY - 4.0f : listY + 4.0f, listW, listH, 6.0f, 16.0f,
                               Color(0, 0, 0, 0.5f), Color(0, 0, 0, 0.0f)));
         fill();
         closePath();
@@ -4034,25 +4219,27 @@ private:
         save();
         scissor(listX, listY, listW, listH);
 
-        const int visible = itemCount < kAudioDropdownMaxItems ? itemCount : kAudioDropdownMaxItems;
+        const int visible = audioVisibleRows(itemCount);
         const std::vector<std::string> items = audioSelectorItems(which);
         const int selected = audioSelectorSelectedIndex(which);
 
         for (int row = 0; row < visible; ++row)
         {
-            const float rowTop = listY + 4.0f + static_cast<float>(row) * kAudioDropdownRowH;
+            // Window row -> real entry. See scrollAudioPortList(); the
+            // hit-test in handleAudioSettingsClick() maps the same way, which
+            // is what lets ports past the 8th be reached at all.
+            const int index = audioListOffset + row;
+            if (index >= itemCount)
+                break;
 
-            // The last row when the list overflowed is a count of what did
-            // not fit: muted, and not clickable (the click handler ignores it
-            // the same way).
-            const bool isOverflow = itemCount > kAudioDropdownMaxItems && row == visible - 1;
-            const bool isSelected = row == selected;
+            const float rowTop = listY + kAudioListEdgeH + static_cast<float>(row) * kAudioDropdownRowH;
+            const bool isSelected = index == selected;
             // No hover on the selected row - it already reads as "this is
             // where you are".
-            const bool rowHovered = !isOverflow && !isSelected
+            const bool rowHovered = !isSelected
                 && audioPointIn(lastMouseX, lastMouseY, listX, rowTop, listW, kAudioDropdownRowH);
 
-            if (!isOverflow && isSelected)
+            if (isSelected)
             {
                 beginPath();
                 rect(listX, rowTop, listW, kAudioDropdownRowH);
@@ -4069,26 +4256,26 @@ private:
                 closePath();
             }
 
-            std::string rowText;
-            if (isOverflow)
-            {
-                rowText = "+" + std::to_string(itemCount - kAudioDropdownMaxItems) + " more...";
-            }
-            else if (row < static_cast<int>(items.size()))
-            {
-                rowText = items[static_cast<std::size_t>(row)];
-            }
-
             // "(None)" stays muted like it is on the control itself, unless
             // it is the selected row.
             fontSize(11.0f);
-            fillColor((isOverflow || (row == 0 && !isSelected)) ? kColorTextMuted : kColorTextPrimary);
+            fillColor((index == 0 && !isSelected) ? kColorTextMuted : kColorTextPrimary);
             textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
-            const std::string fittedRow = truncateToFit(rowText, listW - 24.0f);
+            const std::string fittedRow = truncateToFit(items[static_cast<std::size_t>(index)], listW - 24.0f);
             text(listX + 10.0f, rowTop + kAudioDropdownRowH * 0.5f, fittedRow.c_str(), nullptr);
         }
 
         restore(); // matches the scissor save()
+
+        // What didn't fit, as a chevron + count in the reserved edge strips
+        // instead of a "+N more..." row: that row could not be clicked, so it
+        // wasted one of the eight slots the list has.
+        const int above = audioListOffset;
+        const int below = itemCount - (audioListOffset + visible);
+        if (above > 0)
+            drawAudioListMoreHint(listX, listW, listY, above, true);
+        if (below > 0)
+            drawAudioListMoreHint(listX, listW, listY + listH - kAudioListEdgeH, below, false);
 
         beginPath();
         roundedRect(listX, listY, listW, listH, 6.0f);
@@ -4096,6 +4283,32 @@ private:
         strokeColor(Color(255, 255, 255, 0.10f));
         stroke();
         closePath();
+    }
+
+    // "N more this way" marker of an open port list: a small chevron centred
+    // in the kAudioListEdgeH strip that `stripTop` addresses, plus the count of
+    // entries on that side. It lives outside the row area on purpose - the
+    // click handler resolves rows with the same inset, so a marker can never
+    // be mistaken for something selectable.
+    void drawAudioListMoreHint(float listX, float listW, float stripTop, int count, bool up)
+    {
+        const float cy = stripTop + kAudioListEdgeH * 0.5f;
+        const float cx = listX + listW * 0.5f;
+
+        beginPath();
+        moveTo(cx - 5.0f, cy + (up ? 2.0f : -2.0f));
+        lineTo(cx, cy + (up ? -2.0f : 2.0f));
+        lineTo(cx + 5.0f, cy + (up ? 2.0f : -2.0f));
+        strokeWidth(1.4f);
+        strokeColor(kColorTextMuted.withAlpha(0.8f));
+        stroke();
+        closePath();
+
+        const std::string label = "+" + std::to_string(count);
+        fontSize(9.0f);
+        fillColor(kColorTextMuted);
+        textAlign(ALIGN_RIGHT | ALIGN_MIDDLE);
+        text(listX + listW - 8.0f, cy, label.c_str(), nullptr);
     }
 
     // Full-screen overlay shown while the Tuner is engaged (kParamTunerOn) -
@@ -6185,6 +6398,12 @@ private:
     // Which selector's list is open: 0 = none, 1 = input, 2 = output L,
     // 3 = output R. Only one at a time - they overlap otherwise.
     int audioDropdownOpen = 0;
+
+    // First row shown by the open list (see scrollAudioPortList()). Only
+    // kAudioDropdownMaxItems rows fit at once, so this is what makes the
+    // ports past the 8th reachable; it is reset to 0 whenever a list is
+    // opened, closed or a selection is applied.
+    int audioListOffset = 0;
 
     // Transient feedback ("Connected", "could not connect ..."), faded by
     // uiIdle() so the status line doesn't keep showing a message that has

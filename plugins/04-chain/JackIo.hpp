@@ -38,25 +38,34 @@ public:
     void closeClient();
     const std::string& lastError() const;
 
-    // Detects "we are running as the standalone": looks for a JACK client
-    // exposing the "audio_in_1" port that DPF's standalone client
-    // registers. Inside a DAW our code lives in the host's process, which
-    // has no client with those ports -> false.
+    // Detects "we are running as the standalone": looks for a JACK client,
+    // owned by THIS process and exposing the "audio_in_1" port that DPF's
+    // standalone client registers. Inside a DAW our code lives in the host's
+    // process, whose own clients have no such ports -> false. The owning PID
+    // is what makes the answer trustworthy: a DAW instance also sees the
+    // standalone's 'AmpForge' client on the graph, and must not mistake it
+    // for its own.
     bool isStandalone();
     std::string pluginClient();     // "AmpForge" (or "AmpForge-01"...); "" if not standalone
 
     // Candidates for INPUT: ports we can READ from (flag JackPortIsOutput),
-    // audio type only, excluding our own clients. If there are physical
-    // ports, returns ONLY those; otherwise returns all of them. Sorted by
-    // name.
+    // audio type only, excluding our own clients. Physical (device) ports
+    // come first and virtual ones (Easy Effects, OBS, monitor_*, net/
+    // jacktrip...) after them; nothing is hidden, so a saved route never
+    // turns into "(not found)" just because a soundcard got plugged in.
+    // Each group is sorted by name.
     std::vector<JackPortInfo> inputCandidates();
     // Candidates for OUTPUT: ports we can WRITE to (flag JackPortIsInput),
-    // same filtering/sorting.
+    // same ordering rule: physical first, then virtual, nothing hidden.
     std::vector<JackPortInfo> outputCandidates();
 
     // "" disconnects. Always disconnects what was there before connecting.
     bool setInput(const std::string& port);
-    // Empty r (or r == l) => a single connection. Disconnects first.
+    // Disconnects first, then connects:
+    //   l == ""            -> everything disconnected, r is ignored (a right
+    //                         channel alone is not a pair)
+    //   r == "" or r == l  -> a single mono connection to l
+    //   otherwise          -> both l and r
     bool setOutputs(const std::string& l, const std::string& r);
     void disconnectAll();
 
@@ -85,7 +94,14 @@ struct AudioIoConfig
 };
 
 AudioIoConfig loadAudioIoConfig();
-void saveAudioIoConfig(const AudioIoConfig& config);
+
+// Writes the config to ~/.config/ampforge/audio_io.txt.
+// Returns false when the file could not be opened or the write/close failed
+// (read-only HOME, full disk, path taken by a directory...), so the caller
+// can report the failure instead of showing a routing that will be gone on
+// the next start. The previous file is left untouched on failure only as far
+// as the OS guarantees it; nothing here is atomic.
+bool saveAudioIoConfig(const AudioIoConfig& config);
 
 } // namespace ampforge
 
