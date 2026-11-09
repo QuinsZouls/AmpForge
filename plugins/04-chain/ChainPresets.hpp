@@ -121,6 +121,10 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 
@@ -165,6 +169,10 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 
@@ -212,6 +220,10 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 };

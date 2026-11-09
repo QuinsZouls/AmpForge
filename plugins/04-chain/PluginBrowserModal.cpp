@@ -61,6 +61,13 @@ void PluginBrowserModal::updateFilter() {
     filteredPlugins.clear();
     const std::string q = toLower(searchQuery);
 
+    if (q.size() > 1 && (q[0] == '/' || q[0] == '.' || q.find('/') != std::string::npos)) {
+        auto direct = scanner.scanPath(searchQuery);
+        for (const auto& d : direct) {
+            filteredPlugins.push_back(d);
+        }
+    }
+
     for (const auto& p : allPlugins) {
         if (selectedTab == 1 && p.format != PluginFormat::LV2) continue;
         if (selectedTab == 2 && p.format != PluginFormat::VST3) continue;
@@ -128,6 +135,28 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
     const float closeX = boxX + kModalW - 36.0f;
     const float closeY = boxY + 16.0f;
     const bool closeHovered = pointInRect(lastMouseX, lastMouseY, closeX, closeY, 24.0f, 24.0f);
+
+    // "Browse Filesystem..." Button
+    const float fsBtnW = 150.0f;
+    const float fsBtnH = 24.0f;
+    const float fsBtnX = closeX - fsBtnW - 12.0f;
+    const float fsBtnY = boxY + 16.0f;
+    const bool fsBtnHovered = pointInRect(lastMouseX, lastMouseY, fsBtnX, fsBtnY, fsBtnW, fsBtnH);
+
+    vg->beginPath();
+    vg->roundedRect(fsBtnX, fsBtnY, fsBtnW, fsBtnH, 4.0f);
+    vg->fillColor(fsBtnHovered ? DGL_NAMESPACE::Color(90, 170, 255, 0.35f) : DGL_NAMESPACE::Color(90, 170, 255, 0.18f));
+    vg->strokeColor(DGL_NAMESPACE::Color(90, 170, 255, 0.6f));
+    vg->strokeWidth(1.0f);
+    vg->fill();
+    vg->stroke();
+    vg->closePath();
+
+    vg->fontSize(11.0f);
+    vg->fillColor(DGL_NAMESPACE::Color(220, 240, 255));
+    vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+    vg->text(fsBtnX + fsBtnW * 0.5f, fsBtnY + fsBtnH * 0.5f, "Browse Filesystem...", nullptr);
+
     vg->beginPath();
     vg->circle(closeX + 12.0f, closeY + 12.0f, 12.0f);
     vg->fillColor(closeHovered ? DGL_NAMESPACE::Color(255, 255, 255, 0.15f) : DGL_NAMESPACE::Color(255, 255, 255, 0.05f));
@@ -264,11 +293,49 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
                 vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
                 vg->text(listX + 62.0f, rowY + 19.0f, p.name.c_str(), nullptr);
 
+                // Built-in status / Import button
+                bool isBuiltin = false;
+                if (isBuiltinCheck) {
+                    isBuiltin = isBuiltinCheck(p.path, p.id);
+                }
+                const float btnW = 80.0f;
+                const float btnH = 20.0f;
+                const float btnX = listX + listW - btnW - 10.0f;
+                const float btnY = rowY + (kRowH - btnH) * 0.5f;
+                const bool btnHovered = pointInRect(lastMouseX, lastMouseY, btnX, btnY, btnW, btnH);
+
+                if (isBuiltin) {
+                    vg->beginPath();
+                    vg->roundedRect(btnX, btnY, btnW, btnH, 3.0f);
+                    vg->fillColor(DGL_NAMESPACE::Color(95, 225, 145, 0.15f));
+                    vg->fill();
+                    vg->closePath();
+
+                    vg->fontSize(9.5f);
+                    vg->fillColor(DGL_NAMESPACE::Color(95, 225, 145));
+                    vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    vg->text(btnX + btnW * 0.5f, btnY + btnH * 0.5f, "Built-in \xe2\x9c\x93", nullptr);
+                } else {
+                    vg->beginPath();
+                    vg->roundedRect(btnX, btnY, btnW, btnH, 3.0f);
+                    vg->fillColor(btnHovered ? DGL_NAMESPACE::Color(255, 255, 255, 0.2f) : DGL_NAMESPACE::Color(255, 255, 255, 0.08f));
+                    vg->strokeColor(DGL_NAMESPACE::Color(255, 255, 255, 0.2f));
+                    vg->strokeWidth(1.0f);
+                    vg->fill();
+                    vg->stroke();
+                    vg->closePath();
+
+                    vg->fontSize(9.5f);
+                    vg->fillColor(btnHovered ? DGL_NAMESPACE::Color(255, 255, 255) : DGL_NAMESPACE::Color(200, 200, 210));
+                    vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    vg->text(btnX + btnW * 0.5f, btnY + btnH * 0.5f, "+ Built-in", nullptr);
+                }
+
                 // Vendor
                 vg->fontSize(10.0f);
                 vg->fillColor(DGL_NAMESPACE::Color(140, 140, 150));
                 vg->textAlign(ALIGN_RIGHT | ALIGN_MIDDLE);
-                vg->text(listX + listW - 20.0f, rowY + 19.0f, p.vendor.c_str(), nullptr);
+                vg->text(btnX - 12.0f, rowY + 19.0f, p.vendor.c_str(), nullptr);
             }
 
             rowY += kRowH;
@@ -303,6 +370,19 @@ bool PluginBrowserModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
             return true;
         }
 
+        // Browse Filesystem... button
+        const float fsBtnW = 150.0f;
+        const float fsBtnH = 24.0f;
+        const float fsBtnX = closeX - fsBtnW - 12.0f;
+        const float fsBtnY = boxY + 16.0f;
+        if (pointInRect(lastMouseX, lastMouseY, fsBtnX, fsBtnY, fsBtnW, fsBtnH)) {
+            close();
+            if (onBrowseFilesystem) {
+                onBrowseFilesystem(targetSlot);
+            }
+            return true;
+        }
+
         // Filter tabs
         float tabX = boxX + 24.0f;
         const float tabY = boxY + 54.0f;
@@ -326,6 +406,21 @@ bool PluginBrowserModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
             const int idx = static_cast<int>(relY / kRowH);
             if (idx >= 0 && idx < static_cast<int>(filteredPlugins.size())) {
                 const auto selected = filteredPlugins[static_cast<size_t>(idx)];
+
+                // Check if user clicked "+ Built-in" button
+                const float btnW = 80.0f;
+                const float btnH = 20.0f;
+                const float btnX = listX + listW - btnW - 10.0f;
+                const float itemY = (listY + scrollY) + idx * kRowH;
+                const float btnY = itemY + (kRowH - btnH) * 0.5f;
+
+                if (pointInRect(lastMouseX, lastMouseY, btnX, btnY, btnW, btnH)) {
+                    if (onImportToConfig) {
+                        onImportToConfig(selected);
+                    }
+                    return true;
+                }
+
                 close();
                 if (onPluginSelected) {
                     onPluginSelected(targetSlot, selected);

@@ -74,7 +74,7 @@ class ChainPlugin : public Plugin, public ampforge::HostedPluginProvider
 {
 public:
     ChainPlugin()
-        : Plugin(kParamCount, kProgramCount, 3 + kPluginSlotCount * 5)
+        : Plugin(kParamCount, kProgramCount, 3 + kPluginSlotCount * 5 + 1)
     {
         gateBlock.setThresholdDB(-50.0f);
         gateBlock.setAttackMs(5.0f);
@@ -956,7 +956,7 @@ protected:
             break;
         }
 
-        if (index >= kParamPlugin1On && index <= kParamPlugin4Macro8)
+        if (index >= kParamPlugin1On && index <= kParamPlugin8Macro8)
         {
             const int s = static_cast<int>(index - kParamPlugin1On) / 14;
             const int sub = static_cast<int>(index - kParamPlugin1On) % 14;
@@ -1171,7 +1171,7 @@ protected:
         case kParamNamBypass:       return namBypass ? 1.0f : 0.0f;
 
         default:
-            if (index >= kParamPlugin1On && index <= kParamPlugin4Macro8)
+            if (index >= kParamPlugin1On && index <= kParamPlugin8Macro8)
             {
                 const int s = static_cast<int>(index - kParamPlugin1On) / 14;
                 const int sub = static_cast<int>(index - kParamPlugin1On) % 14;
@@ -1487,7 +1487,7 @@ protected:
             namBypass = value > 0.5f; chain.setEnabled(&namBlock, namOn && !namBypass); break;
         }
 
-        if (index >= kParamPlugin1On && index <= kParamPlugin4Macro8)
+        if (index >= kParamPlugin1On && index <= kParamPlugin8Macro8)
         {
             const int s = static_cast<int>(index - kParamPlugin1On) / 14;
             const int sub = static_cast<int>(index - kParamPlugin1On) % 14;
@@ -1672,6 +1672,14 @@ protected:
                 state.defaultValue = "";
             }
         }
+        else if (index == 3 + kPluginSlotCount * 5)
+        {
+            state.key = kPluginSelectFileStateKey;
+            state.label = "Select Plugin File";
+            state.description = "Select a plugin bundle (.clap, .vst3, .so, .lv2) from filesystem.";
+            state.hints = kStateIsFilenamePath | kStateIsOnlyForUI;
+            state.defaultValue = "";
+        }
     }
 
     // Called by the host when it wants to persist our state (saving a
@@ -1796,13 +1804,33 @@ protected:
 
     void loadHostedPlugin(int s)
     {
-        if (pluginSlots[s].format.empty() || (pluginSlots[s].path.empty() && pluginSlots[s].id.empty()))
+        if (pluginSlots[s].path.empty() && pluginSlots[s].id.empty())
             return;
 
         ampforge::PluginFormat fmt = ampforge::PluginFormat::Unknown;
         if (pluginSlots[s].format == "LV2") fmt = ampforge::PluginFormat::LV2;
         else if (pluginSlots[s].format == "VST3") fmt = ampforge::PluginFormat::VST3;
         else if (pluginSlots[s].format == "CLAP") fmt = ampforge::PluginFormat::CLAP;
+
+        if (fmt == ampforge::PluginFormat::Unknown && !pluginSlots[s].path.empty())
+        {
+            const std::string& p = pluginSlots[s].path;
+            if (p.rfind(".clap") != std::string::npos) fmt = ampforge::PluginFormat::CLAP;
+            else if (p.rfind(".vst3") != std::string::npos) fmt = ampforge::PluginFormat::VST3;
+            else if (p.rfind(".lv2") != std::string::npos || p.rfind(".lv2/") != std::string::npos) fmt = ampforge::PluginFormat::LV2;
+            else
+            {
+                auto scanned = ampforge::PluginScanner().scanPath(p);
+                if (!scanned.empty())
+                {
+                    fmt = scanned[0].format;
+                    if (pluginSlots[s].id.empty()) pluginSlots[s].id = scanned[0].id;
+                }
+            }
+            if (fmt == ampforge::PluginFormat::LV2) pluginSlots[s].format = "LV2";
+            else if (fmt == ampforge::PluginFormat::VST3) pluginSlots[s].format = "VST3";
+            else if (fmt == ampforge::PluginFormat::CLAP) pluginSlots[s].format = "CLAP";
+        }
 
         if (fmt == ampforge::PluginFormat::Unknown)
             return;

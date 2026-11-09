@@ -31,6 +31,7 @@
 #include "PluginBrowserModal.hpp"
 #include "PluginParamsModal.hpp"
 #include "host/HostedPluginProvider.hpp"
+#include "host/PluginConfig.hpp"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -294,10 +295,11 @@ struct PedalDef
     bool hasEqCurve = false;
     bool isExternalPlugin = false;
     int pluginSlotIndex = -1;
+    bool isBuiltinPlugin = false;
 };
 
 // clang-format off
-static const PedalDef kPedalDefs[] =
+static PedalDef kPedalDefs[] =
 {
     { "Noise Gate", kParamGateOn,     kParamGateBypass,     kParamGatePosition,  0, Color(130, 150, 210), {
         { "Thresh",  kParamGateThreshold, -80.0f, 0.0f,    "dB", 1, false },
@@ -414,7 +416,7 @@ static const PedalDef kPedalDefs[] =
         { "Freq",   kParamExciterFrequency, 1500.0f, 14000.0f, "Hz", 0, false },
         { "Amount", kParamExciterAmount,       0.0f,     1.0f, "",   0, true },
     }, false, nullptr, StompShape::Mini, StompIcon::Exciter, "Load File...", true },
-    { "Plugin 1", kParamPlugin1On, kParamPlugin1Bypass, kParamPlugin1Position, 19, Color(100, 190, 220), {
+    { "Plugin", kParamPlugin1On, kParamPlugin1Bypass, kParamPlugin1Position, 19, Color(100, 190, 220), {
         { "In",  kParamPlugin1InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin1Mix,       0.0f,  1.0f, "",   0, true },
         { "Out", kParamPlugin1OutTrim, -24.0f, 24.0f, "dB", 1, false },
@@ -423,7 +425,7 @@ static const PedalDef kPedalDefs[] =
         { "M3",  kParamPlugin1Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin1Macro4,    0.0f,  1.0f, "",   0, true },
     }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 0 },
-    { "Plugin 2", kParamPlugin2On, kParamPlugin2Bypass, kParamPlugin2Position, 20, Color(120, 210, 180), {
+    { "Built-in 1", kParamPlugin2On, kParamPlugin2Bypass, kParamPlugin2Position, 20, Color(120, 210, 180), {
         { "In",  kParamPlugin2InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin2Mix,       0.0f,  1.0f, "",   0, true },
         { "Out", kParamPlugin2OutTrim, -24.0f, 24.0f, "dB", 1, false },
@@ -432,7 +434,7 @@ static const PedalDef kPedalDefs[] =
         { "M3",  kParamPlugin2Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin2Macro4,    0.0f,  1.0f, "",   0, true },
     }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 1 },
-    { "Plugin 3", kParamPlugin3On, kParamPlugin3Bypass, kParamPlugin3Position, 21, Color(220, 180, 120), {
+    { "Built-in 2", kParamPlugin3On, kParamPlugin3Bypass, kParamPlugin3Position, 21, Color(220, 180, 120), {
         { "In",  kParamPlugin3InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin3Mix,       0.0f,  1.0f, "",   0, true },
         { "Out", kParamPlugin3OutTrim, -24.0f, 24.0f, "dB", 1, false },
@@ -441,7 +443,7 @@ static const PedalDef kPedalDefs[] =
         { "M3",  kParamPlugin3Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin3Macro4,    0.0f,  1.0f, "",   0, true },
     }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 2 },
-    { "Plugin 4", kParamPlugin4On, kParamPlugin4Bypass, kParamPlugin4Position, 22, Color(200, 140, 220), {
+    { "Built-in 3", kParamPlugin4On, kParamPlugin4Bypass, kParamPlugin4Position, 22, Color(200, 140, 220), {
         { "In",  kParamPlugin4InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin4Mix,       0.0f,  1.0f, "",   0, true },
         { "Out", kParamPlugin4OutTrim, -24.0f, 24.0f, "dB", 1, false },
@@ -450,6 +452,42 @@ static const PedalDef kPedalDefs[] =
         { "M3",  kParamPlugin4Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin4Macro4,    0.0f,  1.0f, "",   0, true },
     }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 3 },
+    { "Built-in 4", kParamPlugin5On, kParamPlugin5Bypass, kParamPlugin5Position, 23, Color(240, 130, 140), {
+        { "In",  kParamPlugin5InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin5Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin5OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin5Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin5Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin5Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin5Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 4 },
+    { "Built-in 5", kParamPlugin6On, kParamPlugin6Bypass, kParamPlugin6Position, 24, Color(130, 200, 240), {
+        { "In",  kParamPlugin6InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin6Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin6OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin6Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin6Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin6Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin6Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 5 },
+    { "Built-in 6", kParamPlugin7On, kParamPlugin7Bypass, kParamPlugin7Position, 25, Color(210, 220, 120), {
+        { "In",  kParamPlugin7InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin7Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin7OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin7Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin7Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin7Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin7Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 6 },
+    { "Built-in 7", kParamPlugin8On, kParamPlugin8Bypass, kParamPlugin8Position, 26, Color(170, 140, 230), {
+        { "In",  kParamPlugin8InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin8Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin8OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin8Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin8Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin8Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin8Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 7 },
 };
 // clang-format on
 static constexpr int kPedalDefCount = sizeof(kPedalDefs) / sizeof(kPedalDefs[0]);
@@ -520,13 +558,20 @@ static constexpr float kPaletteHeaderH = 24.0f;
 // array to keep existing indices stable, see PedalDef's comment above),
 // then a "VOCAL" header and the vocal-only pedals (currently just
 // Autotune - see PedalDef::isVocal) the same way.
-static const std::vector<PaletteRow> kPaletteRows = []()
+static std::vector<PaletteRow> sPaletteRows;
+static std::string sBuiltinPluginNames[kPluginSlotCount];
+
+static void rebuildPaletteRows()
 {
     std::vector<int> guitarIdx, vocalIdx, pluginIdx;
     for (int i = 0; i < kPedalDefCount; ++i)
     {
         if (kPedalDefs[i].isExternalPlugin)
-            pluginIdx.push_back(i);
+        {
+            // Only include generic Plugin node (slot 0) or configured built-in plugins (slot > 0)
+            if (kPedalDefs[i].pluginSlotIndex == 0 || kPedalDefs[i].isBuiltinPlugin)
+                pluginIdx.push_back(i);
+        }
         else if (kPedalDefs[i].isVocal)
             vocalIdx.push_back(i);
         else
@@ -541,35 +586,39 @@ static const std::vector<PaletteRow> kPaletteRows = []()
     std::sort(vocalIdx.begin(), vocalIdx.end(), byDefaultPosition);
     std::sort(pluginIdx.begin(), pluginIdx.end(), byDefaultPosition);
 
-    std::vector<PaletteRow> rows;
+    sPaletteRows.clear();
     float y = kRackTop;
     for (int i : guitarIdx)
     {
-        rows.push_back({ false, nullptr, i, y, kPaletteItemH });
+        sPaletteRows.push_back({ false, nullptr, i, y, kPaletteItemH });
         y += kPaletteItemH;
     }
     if (!pluginIdx.empty())
     {
-        rows.push_back({ true, "PLUGINS", -1, y, kPaletteHeaderH });
+        sPaletteRows.push_back({ true, "PLUGINS", -1, y, kPaletteHeaderH });
         y += kPaletteHeaderH;
         for (int i : pluginIdx)
         {
-            rows.push_back({ false, nullptr, i, y, kPaletteItemH });
+            sPaletteRows.push_back({ false, nullptr, i, y, kPaletteItemH });
             y += kPaletteItemH;
         }
     }
     if (!vocalIdx.empty())
     {
-        rows.push_back({ true, "VOCAL", -1, y, kPaletteHeaderH });
+        sPaletteRows.push_back({ true, "VOCAL", -1, y, kPaletteHeaderH });
         y += kPaletteHeaderH;
         for (int i : vocalIdx)
         {
-            rows.push_back({ false, nullptr, i, y, kPaletteItemH });
+            sPaletteRows.push_back({ false, nullptr, i, y, kPaletteItemH });
             y += kPaletteItemH;
         }
     }
-    return rows;
-}();
+}
+
+static struct PaletteInit
+{
+    PaletteInit() { rebuildPaletteRows(); }
+} sPaletteInit;
 
 // A blank starting point for "+ New Preset" - only Amp present, flat
 // and neutral, everything else off the board.
@@ -607,6 +656,10 @@ static const float kBlankPresetValues[kParamCount] =
     /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
 };
 // clang-format on
 
@@ -669,6 +722,36 @@ public:
             repaint();
         };
 
+        pluginBrowserModal.onBrowseFilesystem = [this](int slot) {
+            activeFilePickSlot = slot;
+            requestStateFile(kPluginSelectFileStateKey);
+        };
+
+        pluginBrowserModal.onImportToConfig = [this](const ampforge::PluginDescriptor& desc) {
+            if (ampforge::PluginConfig::isBuiltinPlugin(desc.path, desc.id))
+            {
+                ampforge::PluginConfig::removeBuiltinPlugin(!desc.id.empty() ? desc.id : desc.path);
+                reloadBuiltinPlugins();
+                triggerSaveToast("Removed '" + desc.name + "' from built-in plugins");
+            }
+            else
+            {
+                ampforge::BuiltinPluginConfig cfg;
+                cfg.name = desc.name;
+                cfg.path = desc.path;
+                cfg.id = desc.id;
+                cfg.format = ampforge::formatToString(desc.format);
+                ampforge::PluginConfig::addBuiltinPlugin(cfg);
+                reloadBuiltinPlugins();
+                triggerSaveToast("Added '" + desc.name + "' as built-in plugin");
+            }
+            repaint();
+        };
+
+        pluginBrowserModal.isBuiltinCheck = [](const std::string& path, const std::string& id) {
+            return ampforge::PluginConfig::isBuiltinPlugin(path, id);
+        };
+
         pluginParamsModal.onParamChanged = [this](int slot, uint32_t paramId, float value) {
             if (auto* provider = getProvider())
                 provider->enqueuePluginParam(slot, paramId, value);
@@ -681,6 +764,8 @@ public:
             setState(kPluginMapStateKeys[slot], mapStr.c_str());
             stateValues[kPluginMapStateKeys[slot]] = mapStr;
         };
+
+        reloadBuiltinPlugins();
     }
 
 protected:
@@ -1178,7 +1263,7 @@ protected:
         // --- Palette: press-and-hold starts a potential drag ---
         if (mx < kPaletteWidth && my > kTopBarHeight + kControlBarHeight)
         {
-            for (const PaletteRow& row : kPaletteRows)
+            for (const PaletteRow& row : sPaletteRows)
             {
                 const float itemY = row.y + paletteScrollOffset;
                 if (row.isHeader || my < itemY || my >= itemY + row.height)
@@ -1274,8 +1359,8 @@ protected:
 
                 if (def.isExternalPlugin)
                 {
-                    float bx, by, bw, bh, px, py, pw, ph;
-                    pluginHeaderButtonsRect(kModuleLeft, y, moduleW, bx, by, bw, bh, px, py, pw, ph);
+                    float bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih;
+                    pluginHeaderButtonsRect(kModuleLeft, y, moduleW, bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih);
                     if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh)
                     {
                         pluginBrowserModal.open(def.pluginSlotIndex);
@@ -1292,6 +1377,34 @@ protected:
                                                     : def.name;
                         const std::string mappingStr = stateValues[kPluginMapStateKeys[def.pluginSlotIndex]];
                         pluginParamsModal.open(def.pluginSlotIndex, hp, name, mappingStr);
+                        repaint();
+                        return true;
+                    }
+                    const int slot = def.pluginSlotIndex;
+                    const bool hasPlugin = (slot >= 0 && !slotPluginNames[slot].empty());
+                    if (hasPlugin && mx >= ix && mx <= ix + iw && my >= iy && my <= iy + ih)
+                    {
+                        const std::string& path = stateValues[kPluginPathStateKeys[slot]];
+                        const std::string& id = stateValues[kPluginIdStateKeys[slot]];
+                        const std::string& name = slotPluginNames[slot];
+                        const std::string& format = stateValues[kPluginFormatStateKeys[slot]];
+                        if (ampforge::PluginConfig::isBuiltinPlugin(path, id))
+                        {
+                            ampforge::PluginConfig::removeBuiltinPlugin(!id.empty() ? id : path);
+                            reloadBuiltinPlugins();
+                            triggerSaveToast("Removed '" + name + "' from built-in plugins");
+                        }
+                        else
+                        {
+                            ampforge::BuiltinPluginConfig cfg;
+                            cfg.name = name;
+                            cfg.path = path;
+                            cfg.id = id;
+                            cfg.format = format;
+                            ampforge::PluginConfig::addBuiltinPlugin(cfg);
+                            reloadBuiltinPlugins();
+                            triggerSaveToast("Added '" + name + "' as built-in plugin");
+                        }
                         repaint();
                         return true;
                     }
@@ -1641,6 +1754,61 @@ protected:
                     + " (unreadable, or not a valid .nam file)");
         }
 
+        if (std::strcmp(key, kPluginSelectFileStateKey) == 0 && value[0] != '\0')
+        {
+            const std::string pickedPath = value;
+            ampforge::PluginScanner scanner;
+            auto descs = scanner.scanPath(pickedPath);
+            ampforge::PluginDescriptor desc;
+            if (!descs.empty())
+            {
+                desc = descs[0];
+            }
+            else
+            {
+                const std::filesystem::path p(pickedPath);
+                desc.path = pickedPath;
+                desc.name = p.stem().string();
+                desc.id = p.stem().string();
+                const std::string ext = p.extension().string();
+                if (ext == ".vst3") desc.format = ampforge::PluginFormat::VST3;
+                else if (ext == ".clap") desc.format = ampforge::PluginFormat::CLAP;
+                else if (ext == ".lv2" || ext == ".ttl" || ext == ".so") desc.format = ampforge::PluginFormat::LV2;
+                else desc.format = ampforge::PluginFormat::VST3;
+            }
+
+            const int slot = activeFilePickSlot;
+            if (slot >= 0 && slot < kPluginSlotCount)
+            {
+                slotPluginNames[slot] = desc.name;
+                const char* fmtStr = ampforge::formatToString(desc.format);
+                setState(kPluginFormatStateKeys[slot], fmtStr);
+                setState(kPluginIdStateKeys[slot], desc.id.c_str());
+                setState(kPluginPathStateKeys[slot], desc.path.c_str());
+                stateValues[kPluginFormatStateKeys[slot]] = fmtStr;
+                stateValues[kPluginIdStateKeys[slot]] = desc.id;
+                stateValues[kPluginPathStateKeys[slot]] = desc.path;
+
+                // Turn pedal ON if off
+                for (int i = 0; i < kPedalDefCount; ++i)
+                {
+                    if (kPedalDefs[i].isExternalPlugin && kPedalDefs[i].pluginSlotIndex == slot)
+                    {
+                        const int onParam = kPedalDefs[i].onParam;
+                        if (onParam >= 0 && paramValues[onParam] < 0.5f)
+                        {
+                            editParameter(onParam, true);
+                            setParameterValue(onParam, 1.0f);
+                            paramValues[onParam] = 1.0f;
+                            editParameter(onParam, false);
+                        }
+                        break;
+                    }
+                }
+                triggerSaveToast("Loaded plugin: " + desc.name);
+            }
+        }
+
         for (int s = 0; s < kPluginSlotCount; ++s)
         {
             if (std::strcmp(key, kPluginPathStateKeys[s]) == 0)
@@ -1656,6 +1824,56 @@ protected:
     }
 
 private:
+    void reloadBuiltinPlugins()
+    {
+        builtinConfigs = ampforge::PluginConfig::loadBuiltinPlugins();
+        const size_t maxBuiltins = static_cast<size_t>(kPluginSlotCount - 1);
+        const size_t count = std::min(builtinConfigs.size(), maxBuiltins);
+
+        for (int s = 1; s < kPluginSlotCount; ++s)
+        {
+            const size_t idx = static_cast<size_t>(s - 1);
+            int pedalIdx = -1;
+            for (int p = 0; p < kPedalDefCount; ++p)
+            {
+                if (kPedalDefs[p].isExternalPlugin && kPedalDefs[p].pluginSlotIndex == s)
+                {
+                    pedalIdx = p;
+                    break;
+                }
+            }
+            if (pedalIdx < 0)
+                continue;
+
+            if (idx < count)
+            {
+                const auto& cfg = builtinConfigs[idx];
+                sBuiltinPluginNames[s] = cfg.name;
+                kPedalDefs[pedalIdx].name = sBuiltinPluginNames[s].c_str();
+                kPedalDefs[pedalIdx].isBuiltinPlugin = true;
+
+                if (slotPluginNames[s].empty())
+                    slotPluginNames[s] = cfg.name;
+
+                if (stateValues[kPluginPathStateKeys[s]].empty() && !cfg.path.empty())
+                {
+                    setState(kPluginFormatStateKeys[s], cfg.format.c_str());
+                    setState(kPluginIdStateKeys[s], cfg.id.c_str());
+                    setState(kPluginPathStateKeys[s], cfg.path.c_str());
+                    stateValues[kPluginFormatStateKeys[s]] = cfg.format;
+                    stateValues[kPluginIdStateKeys[s]] = cfg.id;
+                    stateValues[kPluginPathStateKeys[s]] = cfg.path;
+                }
+            }
+            else
+            {
+                sBuiltinPluginNames[s].clear();
+                kPedalDefs[pedalIdx].isBuiltinPlugin = false;
+            }
+        }
+
+        rebuildPaletteRows();
+    }
     // Reads just enough of the front of a .nam file to pull out its
     // top-level "architecture" field ("WaveNet", "LSTM", "SlimmableContainer"
     // for A2 captures, ...) - the same field NamBlock::getArchitecture()
@@ -2827,6 +3045,27 @@ private:
         setParameterValue(onParam, 1.0f);
         paramValues[onParam] = 1.0f;
 
+        // If this is a configured built-in plugin, ensure its states are sent to DSP
+        if (kPedalDefs[pedalIndex].isExternalPlugin && kPedalDefs[pedalIndex].isBuiltinPlugin)
+        {
+            const int slot = kPedalDefs[pedalIndex].pluginSlotIndex;
+            if (slot > 0 && slot < kPluginSlotCount)
+            {
+                const size_t cfgIdx = static_cast<size_t>(slot - 1);
+                if (cfgIdx < builtinConfigs.size())
+                {
+                    const auto& cfg = builtinConfigs[cfgIdx];
+                    slotPluginNames[slot] = cfg.name;
+                    setState(kPluginFormatStateKeys[slot], cfg.format.c_str());
+                    setState(kPluginIdStateKeys[slot], cfg.id.c_str());
+                    setState(kPluginPathStateKeys[slot], cfg.path.c_str());
+                    stateValues[kPluginFormatStateKeys[slot]] = cfg.format;
+                    stateValues[kPluginIdStateKeys[slot]] = cfg.id;
+                    stateValues[kPluginPathStateKeys[slot]] = cfg.path;
+                }
+            }
+        }
+
         // Insert this pedal into the CURRENT active order at the rank its
         // defaultPosition (a fixed "recommended signal chain" constant -
         // see kPaletteRows's comment above) gives it among the pedals
@@ -2985,9 +3224,9 @@ private:
     // bottom edge relative to where the list starts.
     static float paletteContentHeight()
     {
-        if (kPaletteRows.empty())
+        if (sPaletteRows.empty())
             return 0.0f;
-        const PaletteRow& last = kPaletteRows.back();
+        const PaletteRow& last = sPaletteRows.back();
         return (last.y + last.height) - kRackTop;
     }
 
@@ -4746,7 +4985,7 @@ private:
         // drawRack()'s own scissor around its card stack.
         scissor(0.0f, kRackTop, kPaletteWidth, paletteVisibleBottom - kRackTop);
 
-        for (const PaletteRow& row : kPaletteRows)
+        for (const PaletteRow& row : sPaletteRows)
         {
             const float itemY = row.y + paletteScrollOffset;
             if (itemY + row.height < kRackTop || itemY > paletteVisibleBottom)
@@ -6178,7 +6417,8 @@ private:
 
     static void pluginHeaderButtonsRect(float moduleLeft, float drawY, float moduleW,
                                         float& browseX, float& browseY, float& browseW, float& browseH,
-                                        float& paramsX, float& paramsY, float& paramsW, float& paramsH)
+                                        float& paramsX, float& paramsY, float& paramsW, float& paramsH,
+                                        float& importX, float& importY, float& importW, float& importH)
     {
         const float rx = moduleLeft + moduleW - kRemoveSize - 12.0f;
         const float toggleX = rx - 10.0f - kHeaderToggleW;
@@ -6194,6 +6434,11 @@ private:
         browseH = btnH;
         browseX = paramsX - 6.0f - browseW;
         browseY = btnY;
+
+        importW = 76.0f;
+        importH = btnH;
+        importX = browseX - 6.0f - importW;
+        importY = btnY;
     }
 
     // Draws one pedal card at the given top-Y. Used both for the normal
@@ -6329,8 +6574,13 @@ private:
             textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
             textLetterSpacing(0.3f);
             std::string cardTitle = def.name;
-            if (def.isExternalPlugin && def.pluginSlotIndex >= 0 && !slotPluginNames[def.pluginSlotIndex].empty())
-                cardTitle = std::string(def.name) + ": " + slotPluginNames[def.pluginSlotIndex];
+            if (def.isExternalPlugin)
+            {
+                if (def.isBuiltinPlugin)
+                    cardTitle = def.name;
+                else if (def.pluginSlotIndex >= 0 && !slotPluginNames[def.pluginSlotIndex].empty())
+                    cardTitle = std::string(def.name) + ": " + slotPluginNames[def.pluginSlotIndex];
+            }
             text(kModuleLeft + 44.0f, drawY + kModuleHeaderH * 0.5f, cardTitle.c_str(), nullptr);
             textLetterSpacing(0.0f);
 
@@ -6374,8 +6624,8 @@ private:
 
             if (def.isExternalPlugin)
             {
-                float bx, by, bw, bh, px, py, pw, ph;
-                pluginHeaderButtonsRect(kModuleLeft, drawY, moduleW, bx, by, bw, bh, px, py, pw, ph);
+                float bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih;
+                pluginHeaderButtonsRect(kModuleLeft, drawY, moduleW, bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih);
 
                 const bool browseHover = (lastMouseX >= bx && lastMouseX <= bx + bw &&
                                           lastMouseY >= by && lastMouseY <= by + bh);
@@ -6418,6 +6668,38 @@ private:
                 fillColor(Color(255, 255, 255, (paramsHover ? 1.0f : 0.85f) * alpha));
                 textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
                 text(px + pw * 0.5f, py + ph * 0.5f, "Params...", nullptr);
+
+                if (hasPlugin)
+                {
+                    const std::string& path = stateValues[kPluginPathStateKeys[def.pluginSlotIndex]];
+                    const std::string& id = stateValues[kPluginIdStateKeys[def.pluginSlotIndex]];
+                    const bool isBuiltin = ampforge::PluginConfig::isBuiltinPlugin(path, id);
+                    const bool importHover = (lastMouseX >= ix && lastMouseX <= ix + iw &&
+                                              lastMouseY >= iy && lastMouseY <= iy + ih);
+
+                    beginPath();
+                    roundedRect(ix, iy, iw, ih, 4.0f);
+                    fillColor(isBuiltin
+                        ? (importHover ? Color(95, 225, 145, 0.35f) : Color(95, 225, 145, 0.2f)).withAlpha(alpha)
+                        : (importHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
+                    fill();
+                    closePath();
+                    beginPath();
+                    roundedRect(ix, iy, iw, ih, 4.0f);
+                    strokeWidth(1.0f);
+                    strokeColor(isBuiltin
+                        ? Color(95, 225, 145, (importHover ? 0.8f : 0.5f) * alpha)
+                        : Color(255, 255, 255, (importHover ? 0.45f : 0.22f) * alpha));
+                    stroke();
+                    closePath();
+
+                    fontSize(10.5f);
+                    fillColor(isBuiltin
+                        ? Color(95, 225, 145, alpha)
+                        : Color(255, 255, 255, (importHover ? 1.0f : 0.85f) * alpha));
+                    textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    text(ix + iw * 0.5f, iy + ih * 0.5f, isBuiltin ? "Built-in \xe2\x9c\x93" : "+ Built-in", nullptr);
+                }
             }
             if (def.hasEqCurve)
             {
@@ -6755,6 +7037,8 @@ private:
     ampforge::PluginBrowserModal pluginBrowserModal;
     ampforge::PluginParamsModal pluginParamsModal;
     std::string slotPluginNames[kPluginSlotCount];
+    std::vector<ampforge::BuiltinPluginConfig> builtinConfigs;
+    int activeFilePickSlot = 0;
 
     ampforge::HostedPluginProvider* getProvider() const
     {

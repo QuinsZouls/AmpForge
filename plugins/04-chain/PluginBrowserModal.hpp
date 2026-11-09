@@ -34,8 +34,11 @@ public:
     bool onKeyboard(const DGL_NAMESPACE::Widget::KeyboardEvent& ev);
     bool onCharacterInput(const DGL_NAMESPACE::Widget::CharacterInputEvent& ev);
 
-    // Selection callback: called when user clicks on a plugin
+    // Callbacks
     std::function<void(int slot, const PluginDescriptor& desc)> onPluginSelected;
+    std::function<void(int slot)> onBrowseFilesystem;
+    std::function<void(const PluginDescriptor& desc)> onImportToConfig;
+    std::function<bool(const std::string& path, const std::string& id)> isBuiltinCheck;
 
 private:
     bool openFlag = false;

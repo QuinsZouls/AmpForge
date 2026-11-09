@@ -17,10 +17,12 @@ add_executable(ampforge_tests
     test_clap_host.cpp
     test_vst3_host.cpp
     test_plugin_scanner.cpp
+    test_plugin_config.cpp
     ../core/host/Lv2Plugin.cpp
     ../core/host/ClapPlugin.cpp
     ../core/host/Vst3Plugin.cpp
     ../core/host/PluginScanner.cpp
+    ../core/host/PluginConfig.cpp
     "${vst3_pluginterfaces_SOURCE_DIR}/base/funknown.cpp")
 
 target_include_directories(ampforge_tests PRIVATE
