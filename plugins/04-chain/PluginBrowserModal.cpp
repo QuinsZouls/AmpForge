@@ -287,11 +287,29 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
                 vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
                 vg->text(listX + 32.0f, rowY + 19.0f, formatToString(p.format), nullptr);
 
+                float nameX = listX + 62.0f;
+                if (p.hasCustomUI) {
+                    vg->beginPath();
+                    vg->roundedRect(listX + 56.0f, rowY + 10.0f, 26.0f, 18.0f, 3.0f);
+                    vg->fillColor(DGL_NAMESPACE::Color(100, 200, 255, 0.2f));
+                    vg->strokeColor(DGL_NAMESPACE::Color(100, 200, 255, 0.6f));
+                    vg->strokeWidth(1.0f);
+                    vg->fill();
+                    vg->stroke();
+                    vg->closePath();
+
+                    vg->fontSize(9.0f);
+                    vg->fillColor(DGL_NAMESPACE::Color(100, 200, 255));
+                    vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    vg->text(listX + 69.0f, rowY + 19.0f, "GUI", nullptr);
+                    nameX += 28.0f;
+                }
+
                 // Plugin Name
                 vg->fontSize(12.0f);
                 vg->fillColor(DGL_NAMESPACE::Color(240, 240, 245));
                 vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
-                vg->text(listX + 62.0f, rowY + 19.0f, p.name.c_str(), nullptr);
+                vg->text(nameX, rowY + 19.0f, p.name.c_str(), nullptr);
 
                 // Built-in status / Import button
                 bool isBuiltin = false;

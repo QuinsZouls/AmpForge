@@ -251,6 +251,7 @@ enum class StompIcon
     Doubler,
     Harmonizer,
     Exciter,
+    Plugin,
 };
 
 struct PedalDef
@@ -424,7 +425,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin1Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin1Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin1Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 0 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 0 },
     { "Built-in 1", kParamPlugin2On, kParamPlugin2Bypass, kParamPlugin2Position, 20, Color(120, 210, 180), {
         { "In",  kParamPlugin2InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin2Mix,       0.0f,  1.0f, "",   0, true },
@@ -433,7 +434,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin2Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin2Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin2Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 1 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 1 },
     { "Built-in 2", kParamPlugin3On, kParamPlugin3Bypass, kParamPlugin3Position, 21, Color(220, 180, 120), {
         { "In",  kParamPlugin3InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin3Mix,       0.0f,  1.0f, "",   0, true },
@@ -442,7 +443,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin3Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin3Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin3Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 2 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 2 },
     { "Built-in 3", kParamPlugin4On, kParamPlugin4Bypass, kParamPlugin4Position, 22, Color(200, 140, 220), {
         { "In",  kParamPlugin4InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin4Mix,       0.0f,  1.0f, "",   0, true },
@@ -451,7 +452,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin4Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin4Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin4Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 3 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 3 },
     { "Built-in 4", kParamPlugin5On, kParamPlugin5Bypass, kParamPlugin5Position, 23, Color(240, 130, 140), {
         { "In",  kParamPlugin5InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin5Mix,       0.0f,  1.0f, "",   0, true },
@@ -460,7 +461,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin5Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin5Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin5Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 4 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 4 },
     { "Built-in 5", kParamPlugin6On, kParamPlugin6Bypass, kParamPlugin6Position, 24, Color(130, 200, 240), {
         { "In",  kParamPlugin6InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin6Mix,       0.0f,  1.0f, "",   0, true },
@@ -469,7 +470,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin6Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin6Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin6Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 5 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 5 },
     { "Built-in 6", kParamPlugin7On, kParamPlugin7Bypass, kParamPlugin7Position, 25, Color(210, 220, 120), {
         { "In",  kParamPlugin7InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin7Mix,       0.0f,  1.0f, "",   0, true },
@@ -478,7 +479,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin7Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin7Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin7Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 6 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 6 },
     { "Built-in 7", kParamPlugin8On, kParamPlugin8Bypass, kParamPlugin8Position, 26, Color(170, 140, 230), {
         { "In",  kParamPlugin8InTrim,  -24.0f, 24.0f, "dB", 1, false },
         { "Mix", kParamPlugin8Mix,       0.0f,  1.0f, "",   0, true },
@@ -487,7 +488,7 @@ static PedalDef kPedalDefs[] =
         { "M2",  kParamPlugin8Macro2,    0.0f,  1.0f, "",   0, true },
         { "M3",  kParamPlugin8Macro3,    0.0f,  1.0f, "",   0, true },
         { "M4",  kParamPlugin8Macro4,    0.0f,  1.0f, "",   0, true },
-    }, false, nullptr, StompShape::Wide, StompIcon::None, "Load Plugin...", false, false, true, 7 },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 7 },
 };
 // clang-format on
 static constexpr int kPedalDefCount = sizeof(kPedalDefs) / sizeof(kPedalDefs[0]);
@@ -768,6 +769,18 @@ public:
         reloadBuiltinPlugins();
     }
 
+    ~ChainUI() override
+    {
+        if (auto* provider = getProvider())
+        {
+            for (int s = 0; s < kPluginSlotCount; ++s)
+            {
+                if (auto* hp = provider->getHostedPlugin(s))
+                    hp->closeUI();
+            }
+        }
+    }
+
 protected:
     void parameterChanged(uint32_t index, float value) override
     {
@@ -923,6 +936,18 @@ protected:
 
         if (anyChanged)
             repaint();
+
+        if (auto* provider = getProvider())
+        {
+            for (int s = 0; s < kPluginSlotCount; ++s)
+            {
+                if (auto* hp = provider->getHostedPlugin(s))
+                {
+                    if (hp->isUIOpen())
+                        hp->idleUI();
+                }
+            }
+        }
     }
 
     void onNanoDisplay() override
@@ -1359,29 +1384,50 @@ protected:
 
                 if (def.isExternalPlugin)
                 {
-                    float bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih;
-                    pluginHeaderButtonsRect(kModuleLeft, y, moduleW, bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih);
-                    if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh)
-                    {
-                        pluginBrowserModal.open(def.pluginSlotIndex);
-                        repaint();
-                        return true;
-                    }
-                    if (mx >= px && mx <= px + pw && my >= py && my <= py + ph)
+                    float gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih;
+                    pluginHeaderButtonsRect(kModuleLeft, y, moduleW, gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih);
+                    const int slot = def.pluginSlotIndex;
+                    const bool hasPlugin = (slot >= 0 && !slotPluginNames[slot].empty());
+
+                    if (hasPlugin && mx >= gx && mx <= gx + gw && my >= gy && my <= gy + gh)
                     {
                         ampforge::HostedPlugin* hp = nullptr;
                         if (auto* provider = getProvider())
-                            hp = provider->getHostedPlugin(def.pluginSlotIndex);
-                        const std::string name = (def.pluginSlotIndex >= 0 && !slotPluginNames[def.pluginSlotIndex].empty())
-                                                    ? slotPluginNames[def.pluginSlotIndex]
-                                                    : def.name;
-                        const std::string mappingStr = stateValues[kPluginMapStateKeys[def.pluginSlotIndex]];
-                        pluginParamsModal.open(def.pluginSlotIndex, hp, name, mappingStr);
+                            hp = provider->getHostedPlugin(slot);
+                        if (hp && hp->hasCustomUI())
+                        {
+                            if (hp->isUIOpen())
+                                hp->closeUI();
+                            else
+                                hp->openUI(getWindow().getNativeWindowHandle());
+                        }
+                        else
+                        {
+                            triggerSaveToast("Plugin has no custom GUI - opening parameter editor");
+                            const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
+                            const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
+                            pluginParamsModal.open(slot, hp, name, mappingStr);
+                        }
                         repaint();
                         return true;
                     }
-                    const int slot = def.pluginSlotIndex;
-                    const bool hasPlugin = (slot >= 0 && !slotPluginNames[slot].empty());
+                    if (hasPlugin && mx >= px && mx <= px + pw && my >= py && my <= py + ph)
+                    {
+                        ampforge::HostedPlugin* hp = nullptr;
+                        if (auto* provider = getProvider())
+                            hp = provider->getHostedPlugin(slot);
+                        const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
+                        const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
+                        pluginParamsModal.open(slot, hp, name, mappingStr);
+                        repaint();
+                        return true;
+                    }
+                    if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh)
+                    {
+                        pluginBrowserModal.open(slot);
+                        repaint();
+                        return true;
+                    }
                     if (hasPlugin && mx >= ix && mx <= ix + iw && my >= iy && my <= iy + ih)
                     {
                         const std::string& path = stateValues[kPluginPathStateKeys[slot]];
@@ -3017,6 +3063,15 @@ private:
 
         if (currentlyOn)
         {
+            if (kPedalDefs[pedalIndex].isExternalPlugin)
+            {
+                const int slot = kPedalDefs[pedalIndex].pluginSlotIndex;
+                if (auto* provider = getProvider())
+                {
+                    if (auto* hp = provider->getHostedPlugin(slot))
+                        hp->closeUI();
+                }
+            }
             // Start a fade-out; uiIdle() clears the parameter once the
             // animation finishes (see the moduleRemoving handling there).
             moduleRemoving[pedalIndex] = true;
@@ -6037,6 +6092,27 @@ private:
             }
             break;
         }
+        case StompIcon::Plugin:
+        {
+            // An audio / power plug icon: two metal prongs on top, a solid plug body, and a cord at the bottom.
+            beginPath();
+            moveTo(cx - 3.5f, cy - 1.5f);
+            lineTo(cx - 3.5f, cy - 6.5f);
+            moveTo(cx + 3.5f, cy - 1.5f);
+            lineTo(cx + 3.5f, cy - 6.5f);
+            stroke();
+            closePath();
+            beginPath();
+            roundedRect(cx - 5.5f, cy - 1.5f, 11.0f, 6.0f, 1.2f);
+            fill();
+            closePath();
+            beginPath();
+            moveTo(cx, cy + 4.5f);
+            lineTo(cx, cy + 7.5f);
+            stroke();
+            closePath();
+            break;
+        }
         case StompIcon::None:
         default:
             break;
@@ -6416,8 +6492,9 @@ private:
     }
 
     static void pluginHeaderButtonsRect(float moduleLeft, float drawY, float moduleW,
-                                        float& browseX, float& browseY, float& browseW, float& browseH,
+                                        float& guiX, float& guiY, float& guiW, float& guiH,
                                         float& paramsX, float& paramsY, float& paramsW, float& paramsH,
+                                        float& browseX, float& browseY, float& browseW, float& browseH,
                                         float& importX, float& importY, float& importW, float& importH)
     {
         const float rx = moduleLeft + moduleW - kRemoveSize - 12.0f;
@@ -6425,9 +6502,14 @@ private:
         const float btnH = 22.0f;
         const float btnY = drawY + (kModuleHeaderH - btnH) * 0.5f;
 
+        guiW = 54.0f;
+        guiH = btnH;
+        guiX = toggleX - 8.0f - guiW;
+        guiY = btnY;
+
         paramsW = 64.0f;
         paramsH = btnH;
-        paramsX = toggleX - 8.0f - paramsW;
+        paramsX = guiX - 6.0f - paramsW;
         paramsY = btnY;
 
         browseW = 76.0f;
@@ -6624,15 +6706,83 @@ private:
 
             if (def.isExternalPlugin)
             {
-                float bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih;
-                pluginHeaderButtonsRect(kModuleLeft, drawY, moduleW, bx, by, bw, bh, px, py, pw, ph, ix, iy, iw, ih);
+                float gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih;
+                pluginHeaderButtonsRect(kModuleLeft, drawY, moduleW, gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih);
 
-                const bool browseHover = (lastMouseX >= bx && lastMouseX <= bx + bw &&
-                                          lastMouseY >= by && lastMouseY <= by + bh);
-                const bool paramsHover = (lastMouseX >= px && lastMouseX <= px + pw &&
-                                          lastMouseY >= py && lastMouseY <= py + ph);
+                const int slot = def.pluginSlotIndex;
+                const bool hasPlugin = slot >= 0 && !slotPluginNames[slot].empty();
+                ampforge::HostedPlugin* hp = nullptr;
+                if (hasPlugin)
+                {
+                    if (auto* provider = getProvider())
+                        hp = provider->getHostedPlugin(slot);
+                }
+
+                if (hasPlugin)
+                {
+                    // GUI button
+                    const bool guiHover = (lastMouseX >= gx && lastMouseX <= gx + gw &&
+                                           lastMouseY >= gy && lastMouseY <= gy + gh);
+                    const bool hasGui = (hp && hp->hasCustomUI());
+                    const bool uiOpen = (hp && hp->isUIOpen());
+
+                    beginPath();
+                    roundedRect(gx, gy, gw, gh, 4.0f);
+                    if (uiOpen)
+                        fillColor(Color(100, 200, 255, 0.45f * alpha));
+                    else if (hasGui)
+                        fillColor((guiHover ? Color(100, 200, 255, 0.28f) : Color(0, 0, 0, 0.28f)).withAlpha(alpha));
+                    else
+                        fillColor((guiHover ? Color(255, 255, 255, 0.18f) : Color(0, 0, 0, 0.2f)).withAlpha(alpha));
+                    fill();
+                    closePath();
+
+                    beginPath();
+                    roundedRect(gx, gy, gw, gh, 4.0f);
+                    strokeWidth(1.0f);
+                    if (uiOpen)
+                        strokeColor(Color(120, 220, 255, 0.9f * alpha));
+                    else if (hasGui)
+                        strokeColor(Color(100, 200, 255, (guiHover ? 0.75f : 0.45f) * alpha));
+                    else
+                        strokeColor(Color(255, 255, 255, (guiHover ? 0.35f : 0.18f) * alpha));
+                    stroke();
+                    closePath();
+
+                    fontSize(11.0f);
+                    if (uiOpen)
+                        fillColor(Color(255, 255, 255, alpha));
+                    else if (hasGui)
+                        fillColor(Color(120, 220, 255, (guiHover ? 1.0f : 0.85f) * alpha));
+                    else
+                        fillColor(Color(180, 180, 180, (guiHover ? 0.9f : 0.6f) * alpha));
+                    textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    text(gx + gw * 0.5f, gy + gh * 0.5f, uiOpen ? "GUI \xe2\x97\x8f" : "GUI", nullptr);
+
+                    // Params button
+                    const bool paramsHover = (lastMouseX >= px && lastMouseX <= px + pw &&
+                                              lastMouseY >= py && lastMouseY <= py + ph);
+                    beginPath();
+                    roundedRect(px, py, pw, ph, 4.0f);
+                    fillColor((paramsHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
+                    fill();
+                    closePath();
+                    beginPath();
+                    roundedRect(px, py, pw, ph, 4.0f);
+                    strokeWidth(1.0f);
+                    strokeColor(Color(255, 255, 255, (paramsHover ? 0.45f : 0.22f) * alpha));
+                    stroke();
+                    closePath();
+
+                    fontSize(11.0f);
+                    fillColor(Color(255, 255, 255, (paramsHover ? 1.0f : 0.85f) * alpha));
+                    textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    text(px + pw * 0.5f, py + ph * 0.5f, "Params", nullptr);
+                }
 
                 // Browse / Change button
+                const bool browseHover = (lastMouseX >= bx && lastMouseX <= bx + bw &&
+                                          lastMouseY >= by && lastMouseY <= by + bh);
                 beginPath();
                 roundedRect(bx, by, bw, bh, 4.0f);
                 fillColor((browseHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
@@ -6648,26 +6798,7 @@ private:
                 fontSize(11.0f);
                 fillColor(Color(255, 255, 255, (browseHover ? 1.0f : 0.85f) * alpha));
                 textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
-                const bool hasPlugin = def.pluginSlotIndex >= 0 && !slotPluginNames[def.pluginSlotIndex].empty();
                 text(bx + bw * 0.5f, by + bh * 0.5f, hasPlugin ? "Change..." : "Browse...", nullptr);
-
-                // Params button
-                beginPath();
-                roundedRect(px, py, pw, ph, 4.0f);
-                fillColor((paramsHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
-                fill();
-                closePath();
-                beginPath();
-                roundedRect(px, py, pw, ph, 4.0f);
-                strokeWidth(1.0f);
-                strokeColor(Color(255, 255, 255, (paramsHover ? 0.45f : 0.22f) * alpha));
-                stroke();
-                closePath();
-
-                fontSize(11.0f);
-                fillColor(Color(255, 255, 255, (paramsHover ? 1.0f : 0.85f) * alpha));
-                textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
-                text(px + pw * 0.5f, py + ph * 0.5f, "Params...", nullptr);
 
                 if (hasPlugin)
                 {

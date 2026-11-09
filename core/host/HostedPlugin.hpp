@@ -78,6 +78,15 @@ public:
     // State persistence
     virtual std::string saveState() const { return {}; }
     virtual bool loadState(const std::string& state) { return true; }
+
+    // GUI / Custom Editor
+    virtual bool hasCustomUI() const { return false; }
+    virtual bool openUI(uintptr_t parentWindow = 0) { (void)parentWindow; return false; }
+    virtual void closeUI() {}
+    virtual bool isUIOpen() const { return false; }
+    virtual void idleUI() {}
+    virtual void getUISize(uint32_t& width, uint32_t& height) const { width = 0; height = 0; }
+    virtual bool resizeUI(uint32_t width, uint32_t height) { (void)width; (void)height; return false; }
 };
 
 } // namespace ampforge

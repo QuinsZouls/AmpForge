@@ -274,6 +274,7 @@ std::vector<PluginDescriptor> PluginScanner::scanPluginFile(const std::string& p
             desc.vendor = clap->getVendor();
             desc.numAudioInputs = 1;
             desc.numAudioOutputs = 1;
+            desc.hasCustomUI = clap->hasCustomUI();
             results.push_back(desc);
         }
     } else if (format == PluginFormat::VST3) {
@@ -287,6 +288,7 @@ std::vector<PluginDescriptor> PluginScanner::scanPluginFile(const std::string& p
             desc.vendor = vst3->getVendor();
             desc.numAudioInputs = 1;
             desc.numAudioOutputs = 1;
+            desc.hasCustomUI = vst3->hasCustomUI();
             results.push_back(desc);
         }
     }
@@ -307,6 +309,7 @@ std::string PluginScanner::scanSinglePluginToJson(const std::string& path) {
         item["vendor"] = d.vendor;
         item["numAudioInputs"] = d.numAudioInputs;
         item["numAudioOutputs"] = d.numAudioOutputs;
+        item["hasCustomUI"] = d.hasCustomUI;
         root.push_back(item);
     }
     return root.dump(2);
@@ -332,6 +335,7 @@ bool PluginScanner::loadCache() {
             entry.desc.vendor = item.value("vendor", "");
             entry.desc.numAudioInputs = item.value("audioIn", 0);
             entry.desc.numAudioOutputs = item.value("audioOut", 0);
+            entry.desc.hasCustomUI = item.value("hasCustomUI", false);
 
             std::string fmtStr = item.value("format", "Unknown");
             if (fmtStr == "LV2") entry.desc.format = PluginFormat::LV2;
@@ -366,6 +370,7 @@ bool PluginScanner::saveCache() {
         item["vendor"] = entry.desc.vendor;
         item["audioIn"] = entry.desc.numAudioInputs;
         item["audioOut"] = entry.desc.numAudioOutputs;
+        item["hasCustomUI"] = entry.desc.hasCustomUI;
         root.push_back(item);
     }
 

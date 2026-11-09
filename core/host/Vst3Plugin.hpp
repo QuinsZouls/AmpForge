@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HostedPlugin.hpp"
+#include "PluginWindowX11.hpp"
 #include <string>
 #include <vector>
 #include <memory>
@@ -12,10 +13,11 @@
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstparameterchanges.h>
+#include <pluginterfaces/gui/iplugview.h>
 
 namespace ampforge {
 
-class Vst3Plugin : public HostedPlugin {
+class Vst3Plugin : public HostedPlugin, public Steinberg::IPlugFrame {
 public:
     Vst3Plugin();
     ~Vst3Plugin() override;
@@ -42,6 +44,23 @@ public:
 
     std::string saveState() const override;
     bool loadState(const std::string& state) override;
+
+    // GUI / Custom Editor
+    bool hasCustomUI() const override;
+    bool openUI(uintptr_t parentWindow = 0) override;
+    void closeUI() override;
+    bool isUIOpen() const override;
+    void idleUI() override;
+    void getUISize(uint32_t& width, uint32_t& height) const override;
+    bool resizeUI(uint32_t width, uint32_t height) override;
+
+    // Steinberg::IPlugFrame
+    Steinberg::tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
+
+    // Steinberg::FUnknown (for IPlugFrame)
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override;
+    Steinberg::uint32 PLUGIN_API addRef() override { return 1; }
+    Steinberg::uint32 PLUGIN_API release() override { return 1; }
 
     const std::string& getLastError() const { return lastError; }
 
@@ -76,6 +95,9 @@ private:
     Steinberg::Vst::IComponent* component = nullptr;
     Steinberg::Vst::IAudioProcessor* processor = nullptr;
     Steinberg::Vst::IEditController* controller = nullptr;
+    Steinberg::IPlugView* plugView = nullptr;
+    std::unique_ptr<PluginWindowX11> windowHost;
+    bool isUIOpenFlag = false;
 
     double activeSampleRate = 44100.0;
     uint32_t activeMaxBlock = 2048;

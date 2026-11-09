@@ -8,6 +8,7 @@ dpf_add_plugin(ampforge_main
     ../../core/host/Vst3Plugin.cpp
     ../../core/host/PluginScanner.cpp
     ../../core/host/PluginConfig.cpp
+    ../../core/host/PluginWindowX11.cpp
     ${vst3_pluginterfaces_SOURCE_DIR}/base/funknown.cpp
   FILES_UI
     ChainUI.cpp

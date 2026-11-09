@@ -20,6 +20,8 @@ DEF_CLASS_IID(Steinberg::Vst::IAudioProcessor)
 DEF_CLASS_IID(Steinberg::Vst::IEditController)
 DEF_CLASS_IID(Steinberg::Vst::IParameterChanges)
 DEF_CLASS_IID(Steinberg::Vst::IParamValueQueue)
+DEF_CLASS_IID(Steinberg::IPlugFrame)
+DEF_CLASS_IID(Steinberg::IPlugView)
 
 namespace ampforge {
 
@@ -333,6 +335,7 @@ void Vst3Plugin::discoverParameters() {
 }
 
 void Vst3Plugin::unload() {
+    closeUI();
     deactivate();
     if (controller) {
         controller->terminate();
@@ -554,6 +557,136 @@ bool Vst3Plugin::loadState(const std::string& state) {
         }
     }
     return true;
+}
+
+bool Vst3Plugin::hasCustomUI() const {
+    if (!controller) return false;
+    Steinberg::IPlugView* view = controller->createView(Steinberg::Vst::ViewType::kEditor);
+    if (!view) return false;
+    const bool supported = (view->isPlatformTypeSupported(Steinberg::kPlatformTypeX11EmbedWindowID) == Steinberg::kResultTrue);
+    view->release();
+    return supported;
+}
+
+bool Vst3Plugin::openUI(uintptr_t parentWindow) {
+    if (!controller) return false;
+    if (isUIOpenFlag) return true;
+
+    plugView = controller->createView(Steinberg::Vst::ViewType::kEditor);
+    if (!plugView) return false;
+
+    if (plugView->isPlatformTypeSupported(Steinberg::kPlatformTypeX11EmbedWindowID) != Steinberg::kResultTrue) {
+        plugView->release();
+        plugView = nullptr;
+        return false;
+    }
+
+    Steinberg::ViewRect rect;
+    if (plugView->getSize(&rect) != Steinberg::kResultTrue) {
+        rect = Steinberg::ViewRect(0, 0, 800, 600);
+    }
+    const uint32_t width = std::max(50, rect.right - rect.left);
+    const uint32_t height = std::max(50, rect.bottom - rect.top);
+    const bool canResize = (plugView->canResize() == Steinberg::kResultTrue);
+
+    windowHost = std::make_unique<PluginWindowX11>();
+    if (!windowHost->open(pluginName, width, height, parentWindow, canResize)) {
+        plugView->release();
+        plugView = nullptr;
+        windowHost.reset();
+        return false;
+    }
+
+    plugView->setFrame(this);
+
+    if (plugView->attached(reinterpret_cast<void*>(windowHost->getWindowHandle()),
+                           Steinberg::kPlatformTypeX11EmbedWindowID) != Steinberg::kResultTrue) {
+        plugView->setFrame(nullptr);
+        plugView->release();
+        plugView = nullptr;
+        windowHost->close();
+        windowHost.reset();
+        return false;
+    }
+
+    windowHost->onClose = [this]() {
+        closeUI();
+    };
+    windowHost->onResize = [this](uint32_t w, uint32_t h) {
+        if (plugView) {
+            Steinberg::ViewRect newRect(0, 0, static_cast<Steinberg::int32>(w), static_cast<Steinberg::int32>(h));
+            plugView->onSize(&newRect);
+        }
+    };
+
+    isUIOpenFlag = true;
+    return true;
+}
+
+void Vst3Plugin::closeUI() {
+    if (!isUIOpenFlag) return;
+    if (plugView) {
+        plugView->setFrame(nullptr);
+        plugView->removed();
+        plugView->release();
+        plugView = nullptr;
+    }
+    if (windowHost) {
+        windowHost->close();
+        windowHost.reset();
+    }
+    isUIOpenFlag = false;
+}
+
+bool Vst3Plugin::isUIOpen() const {
+    return isUIOpenFlag;
+}
+
+void Vst3Plugin::idleUI() {
+    if (windowHost) {
+        windowHost->idle();
+    }
+}
+
+void Vst3Plugin::getUISize(uint32_t& width, uint32_t& height) const {
+    width = 0; height = 0;
+    if (plugView) {
+        Steinberg::ViewRect rect;
+        if (plugView->getSize(&rect) == Steinberg::kResultTrue) {
+            width = std::max(0, rect.right - rect.left);
+            height = std::max(0, rect.bottom - rect.top);
+        }
+    }
+}
+
+bool Vst3Plugin::resizeUI(uint32_t width, uint32_t height) {
+    if (plugView && windowHost) {
+        Steinberg::ViewRect rect(0, 0, static_cast<Steinberg::int32>(width), static_cast<Steinberg::int32>(height));
+        windowHost->setSize(width, height);
+        return plugView->onSize(&rect) == Steinberg::kResultTrue;
+    }
+    return false;
+}
+
+Steinberg::tresult PLUGIN_API Vst3Plugin::resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) {
+    if (view && newSize && windowHost) {
+        const uint32_t w = std::max(50, newSize->right - newSize->left);
+        const uint32_t h = std::max(50, newSize->bottom - newSize->top);
+        windowHost->setSize(w, h);
+        view->onSize(newSize);
+        return Steinberg::kResultTrue;
+    }
+    return Steinberg::kResultFalse;
+}
+
+Steinberg::tresult PLUGIN_API Vst3Plugin::queryInterface(const Steinberg::TUID iid, void** obj) {
+    if (Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::IPlugFrame::iid) ||
+        Steinberg::FUnknownPrivate::iidEqual(iid, Steinberg::FUnknown::iid)) {
+        *obj = static_cast<Steinberg::IPlugFrame*>(this);
+        return Steinberg::kResultTrue;
+    }
+    *obj = nullptr;
+    return Steinberg::kNoInterface;
 }
 
 } // namespace ampforge

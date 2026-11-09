@@ -185,6 +185,8 @@ bool ClapPlugin::load(const std::string& path, const std::string& targetPluginId
         plugin->get_extension(plugin, CLAP_EXT_LATENCY));
     stateExt = reinterpret_cast<const clap_plugin_state_t*>(
         plugin->get_extension(plugin, CLAP_EXT_STATE));
+    guiExt = reinterpret_cast<const clap_plugin_gui_t*>(
+        plugin->get_extension(plugin, CLAP_EXT_GUI));
 
     // Channels
     inChannels = 1;
@@ -242,6 +244,8 @@ bool ClapPlugin::load(const std::string& path, const std::string& targetPluginId
 }
 
 void ClapPlugin::unload() {
+    closeUI();
+    guiExt = nullptr;
     deactivate();
     if (plugin) {
         plugin->destroy(plugin);
@@ -480,6 +484,127 @@ bool ClapPlugin::loadState(const std::string& state) {
         }
     }
     return true;
+}
+
+bool ClapPlugin::hasCustomUI() const {
+    return guiExt != nullptr;
+}
+
+bool ClapPlugin::openUI(uintptr_t parentWindow) {
+    if (!plugin || !guiExt) return false;
+    if (isUIOpenFlag) return true;
+
+    // Check if floating window is supported
+    const bool canFloat = guiExt->is_api_supported && guiExt->is_api_supported(plugin, nullptr, true);
+    const bool canX11 = guiExt->is_api_supported && guiExt->is_api_supported(plugin, CLAP_WINDOW_API_X11, false);
+
+    if (canFloat) {
+        if (!guiExt->create(plugin, nullptr, true)) return false;
+        if (parentWindow != 0 && guiExt->set_transient) {
+            clap_window_t trans;
+            trans.api = CLAP_WINDOW_API_X11;
+            trans.x11 = static_cast<clap_xwnd>(parentWindow);
+            guiExt->set_transient(plugin, &trans);
+        }
+        if (guiExt->suggest_title) {
+            guiExt->suggest_title(plugin, pluginName.c_str());
+        }
+        if (guiExt->show && !guiExt->show(plugin)) {
+            guiExt->destroy(plugin);
+            return false;
+        }
+        isFloatingUI = true;
+        isUIOpenFlag = true;
+        return true;
+    }
+
+    if (canX11) {
+        if (!guiExt->create(plugin, CLAP_WINDOW_API_X11, false)) return false;
+        uint32_t width = 800, height = 600;
+        if (guiExt->get_size) {
+            guiExt->get_size(plugin, &width, &height);
+        }
+        const bool canResize = guiExt->can_resize ? guiExt->can_resize(plugin) : false;
+
+        windowHost = std::make_unique<PluginWindowX11>();
+        if (!windowHost->open(pluginName, width, height, parentWindow, canResize)) {
+            guiExt->destroy(plugin);
+            windowHost.reset();
+            return false;
+        }
+
+        clap_window_t win;
+        win.api = CLAP_WINDOW_API_X11;
+        win.x11 = static_cast<clap_xwnd>(windowHost->getWindowHandle());
+
+        if (guiExt->set_parent && !guiExt->set_parent(plugin, &win)) {
+            windowHost->close();
+            windowHost.reset();
+            guiExt->destroy(plugin);
+            return false;
+        }
+
+        if (guiExt->show && !guiExt->show(plugin)) {
+            windowHost->close();
+            windowHost.reset();
+            guiExt->destroy(plugin);
+            return false;
+        }
+
+        windowHost->onClose = [this]() {
+            closeUI();
+        };
+        windowHost->onResize = [this](uint32_t w, uint32_t h) {
+            if (guiExt && guiExt->set_size) {
+                guiExt->set_size(plugin, w, h);
+            }
+        };
+
+        isFloatingUI = false;
+        isUIOpenFlag = true;
+        return true;
+    }
+
+    return false;
+}
+
+void ClapPlugin::closeUI() {
+    if (!isUIOpenFlag) return;
+    if (plugin && guiExt) {
+        if (guiExt->hide) guiExt->hide(plugin);
+        if (guiExt->destroy) guiExt->destroy(plugin);
+    }
+    if (windowHost) {
+        windowHost->close();
+        windowHost.reset();
+    }
+    isUIOpenFlag = false;
+    isFloatingUI = false;
+}
+
+bool ClapPlugin::isUIOpen() const {
+    return isUIOpenFlag;
+}
+
+void ClapPlugin::idleUI() {
+    if (windowHost) {
+        windowHost->idle();
+    }
+}
+
+void ClapPlugin::getUISize(uint32_t& width, uint32_t& height) const {
+    width = 0; height = 0;
+    if (plugin && guiExt && guiExt->get_size) {
+        guiExt->get_size(plugin, &width, &height);
+    }
+}
+
+bool ClapPlugin::resizeUI(uint32_t width, uint32_t height) {
+    if (!plugin || !guiExt || !guiExt->set_size) return false;
+    if (windowHost) {
+        windowHost->setSize(width, height);
+    }
+    return guiExt->set_size(plugin, width, height);
 }
 
 } // namespace ampforge

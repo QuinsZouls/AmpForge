@@ -18,11 +18,13 @@ add_executable(ampforge_tests
     test_vst3_host.cpp
     test_plugin_scanner.cpp
     test_plugin_config.cpp
+    test_plugin_gui.cpp
     ../core/host/Lv2Plugin.cpp
     ../core/host/ClapPlugin.cpp
     ../core/host/Vst3Plugin.cpp
     ../core/host/PluginScanner.cpp
     ../core/host/PluginConfig.cpp
+    ../core/host/PluginWindowX11.cpp
     "${vst3_pluginterfaces_SOURCE_DIR}/base/funknown.cpp")
 
 target_include_directories(ampforge_tests PRIVATE
@@ -37,7 +39,8 @@ target_compile_definitions(ampforge_tests PRIVATE
     TEST_CLAP_PLUGIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/test_clap_gain.clap"
     TEST_VST3_PLUGIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/test_vst3_gain.so")
 
-target_link_libraries(ampforge_tests PRIVATE ${CMAKE_DL_LIBS})
+find_package(X11 REQUIRED)
+target_link_libraries(ampforge_tests PRIVATE ${CMAKE_DL_LIBS} ${X11_X11_LIB})
 
 # Build sample LV2 test plugin
 add_library(test_lv2_gain MODULE test_lv2_gain/gain.c)

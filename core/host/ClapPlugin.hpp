@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HostedPlugin.hpp"
+#include "PluginWindowX11.hpp"
 #include <clap/clap.h>
 #include <string>
 #include <vector>
@@ -40,6 +41,15 @@ public:
     std::string saveState() const override;
     bool loadState(const std::string& state) override;
 
+    // GUI / Custom Editor
+    bool hasCustomUI() const override;
+    bool openUI(uintptr_t parentWindow = 0) override;
+    void closeUI() override;
+    bool isUIOpen() const override;
+    void idleUI() override;
+    void getUISize(uint32_t& width, uint32_t& height) const override;
+    bool resizeUI(uint32_t width, uint32_t height) override;
+
     const std::string& getLastError() const { return lastError; }
 
 private:
@@ -75,6 +85,11 @@ private:
     const clap_plugin_audio_ports_t* audioPortsExt = nullptr;
     const clap_plugin_latency_t* latencyExt = nullptr;
     const clap_plugin_state_t* stateExt = nullptr;
+    const clap_plugin_gui_t* guiExt = nullptr;
+
+    std::unique_ptr<PluginWindowX11> windowHost;
+    bool isUIOpenFlag = false;
+    bool isFloatingUI = false;
 
     double activeSampleRate = 44100.0;
     uint32_t activeMaxBlock = 2048;
