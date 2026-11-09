@@ -30,9 +30,10 @@ bool pointInRect(float px, float py, float x, float y, float w, float h) {
 PluginParamsModal::PluginParamsModal() = default;
 PluginParamsModal::~PluginParamsModal() = default;
 
-void PluginParamsModal::open(int slotIndex, HostedPlugin* plugin, const std::string& name, const std::string& mappingStr) {
+void PluginParamsModal::open(int slotIndex, HostedPlugin* plugin, const std::string& name, const std::string& mappingStr, const std::string& format) {
     targetSlot = slotIndex;
     pluginTitle = name.empty() ? "External Plugin" : name;
+    pluginFormat = format;
     openFlag = true;
     scrollY = 0.0f;
     draggingSliderIdx = -1;
@@ -50,6 +51,15 @@ void PluginParamsModal::open(int slotIndex, HostedPlugin* plugin, const std::str
     }
 
     parseMapping(mappingStr);
+}
+
+void PluginParamsModal::updateParamValue(uint32_t paramId, float value) {
+    for (auto& r : rows) {
+        if (r.info.id == paramId) {
+            r.currentValue = value;
+            break;
+        }
+    }
 }
 
 void PluginParamsModal::parseMapping(const std::string& mapStr) {
@@ -130,12 +140,49 @@ void PluginParamsModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heigh
     vg->fontSize(16.0f);
     vg->fillColor(DGL_NAMESPACE::Color(245, 245, 250));
     vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
-    std::string title = "Parameters - " + pluginTitle;
-    vg->text(boxX + 24.0f, boxY + 28.0f, title.c_str(), nullptr);
+    vg->text(boxX + 24.0f, boxY + 28.0f, pluginTitle.c_str(), nullptr);
+
+    // Format badge
+    if (!pluginFormat.empty()) {
+        const float tw = static_cast<float>(pluginTitle.length()) * 8.5f + 10.0f;
+        const float badgeX = boxX + 24.0f + tw + 8.0f;
+        const float badgeY = boxY + 18.0f;
+        const float badgeW = 44.0f;
+        const float badgeH = 20.0f;
+
+        DGL_NAMESPACE::Color badgeBg(50, 60, 75);
+        DGL_NAMESPACE::Color badgeBorder(100, 150, 200);
+        if (pluginFormat == "LV2") {
+            badgeBg = DGL_NAMESPACE::Color(30, 90, 130, 0.5f);
+            badgeBorder = DGL_NAMESPACE::Color(50, 180, 240, 0.9f);
+        } else if (pluginFormat == "VST3") {
+            badgeBg = DGL_NAMESPACE::Color(130, 75, 25, 0.5f);
+            badgeBorder = DGL_NAMESPACE::Color(240, 140, 40, 0.9f);
+        } else if (pluginFormat == "CLAP") {
+            badgeBg = DGL_NAMESPACE::Color(100, 45, 140, 0.5f);
+            badgeBorder = DGL_NAMESPACE::Color(190, 95, 255, 0.9f);
+        }
+
+        vg->beginPath();
+        vg->roundedRect(badgeX, badgeY, badgeW, badgeH, 4.0f);
+        vg->fillColor(badgeBg);
+        vg->strokeColor(badgeBorder);
+        vg->strokeWidth(1.0f);
+        vg->fill();
+        vg->stroke();
+        vg->closePath();
+
+        vg->fontSize(10.5f);
+        vg->fillColor(DGL_NAMESPACE::Color(240, 240, 250));
+        vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+        vg->text(badgeX + badgeW * 0.5f, badgeY + badgeH * 0.5f, pluginFormat.c_str(), nullptr);
+    }
 
     vg->fontSize(11.0f);
     vg->fillColor(DGL_NAMESPACE::Color(140, 140, 150));
-    vg->text(boxX + 24.0f, boxY + 48.0f, "Map any parameter to Macro Knobs (M1-M8) on the pedal card", nullptr);
+    vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
+    std::string sub = std::to_string(rows.size()) + " Parameters · Graphical Interface & Pedal Knob Mapping";
+    vg->text(boxX + 24.0f, boxY + 48.0f, sub.c_str(), nullptr);
 
     // Close "X" Button
     const float closeX = boxX + kModalW - 36.0f;
@@ -182,9 +229,18 @@ void PluginParamsModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heigh
             auto& r = rows[i];
 
             if (rowY + kRowH >= listY && rowY <= listY + listH) {
+                // Row background highlight if mapped to a pedal knob
+                if (r.mappedMacro >= 0) {
+                    vg->beginPath();
+                    vg->roundedRect(listX + 4.0f, rowY + 2.0f, listW - 8.0f, kRowH - 4.0f, 4.0f);
+                    vg->fillColor(DGL_NAMESPACE::Color(235, 155, 60, 0.08f));
+                    vg->fill();
+                    vg->closePath();
+                }
+
                 // Name
                 vg->fontSize(12.0f);
-                vg->fillColor(DGL_NAMESPACE::Color(230, 230, 235));
+                vg->fillColor(r.mappedMacro >= 0 ? DGL_NAMESPACE::Color(255, 230, 180) : DGL_NAMESPACE::Color(230, 230, 235));
                 vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
                 vg->text(listX + 16.0f, rowY + 20.0f, r.info.name.c_str(), nullptr);
 
@@ -219,7 +275,10 @@ void PluginParamsModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heigh
 
                 // Value readout
                 char valBuf[32];
-                snprintf(valBuf, sizeof(valBuf), "%.2f %s", r.currentValue, r.info.unit.c_str());
+                if (r.info.isInteger)
+                    snprintf(valBuf, sizeof(valBuf), "%.0f%s%s", r.currentValue, r.info.unit.empty() ? "" : " ", r.info.unit.c_str());
+                else
+                    snprintf(valBuf, sizeof(valBuf), "%.2f%s%s", r.currentValue, r.info.unit.empty() ? "" : " ", r.info.unit.c_str());
                 vg->fontSize(11.0f);
                 vg->fillColor(DGL_NAMESPACE::Color(160, 160, 170));
                 vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
@@ -307,7 +366,7 @@ bool PluginParamsModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
                         auto& r = rows[i];
                         if (r.mappedMacro < 0) {
                             r.mappedMacro = 0;
-                        } else if (r.mappedMacro < 7) {
+                        } else if (r.mappedMacro < 3) {
                             r.mappedMacro++;
                         } else {
                             r.mappedMacro = -1;
@@ -337,7 +396,9 @@ bool PluginParamsModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
                         draggingSliderIdx = static_cast<int>(i);
                         auto& r = rows[i];
                         float norm = std::clamp((lastMouseX - sliderX) / sliderW, 0.0f, 1.0f);
-                        r.currentValue = r.info.minValue + norm * (r.info.maxValue - r.info.minValue);
+                        float val = r.info.minValue + norm * (r.info.maxValue - r.info.minValue);
+                        if (r.info.isInteger) val = std::round(val);
+                        r.currentValue = val;
                         if (onParamChanged) {
                             onParamChanged(targetSlot, r.info.id, r.currentValue);
                         }
@@ -367,7 +428,9 @@ bool PluginParamsModal::onMotion(const DGL_NAMESPACE::Widget::MotionEvent& ev) {
 
         auto& r = rows[static_cast<size_t>(draggingSliderIdx)];
         float norm = std::clamp((lastMouseX - sliderX) / sliderW, 0.0f, 1.0f);
-        r.currentValue = r.info.minValue + norm * (r.info.maxValue - r.info.minValue);
+        float val = r.info.minValue + norm * (r.info.maxValue - r.info.minValue);
+        if (r.info.isInteger) val = std::round(val);
+        r.currentValue = val;
         if (onParamChanged) {
             onParamChanged(targetSlot, r.info.id, r.currentValue);
         }

@@ -562,6 +562,18 @@ static constexpr float kPaletteHeaderH = 24.0f;
 static std::vector<PaletteRow> sPaletteRows;
 static std::string sBuiltinPluginNames[kPluginSlotCount];
 
+struct SlotMacroParamInfo {
+    std::string name;
+    std::string unit;
+    float minVal = 0.0f;
+    float maxVal = 1.0f;
+    float defVal = 0.0f;
+    int decimals = 1;
+    uint32_t paramId = 0xFFFFFFFF;
+    bool mapped = false;
+};
+static SlotMacroParamInfo sSlotMacroParams[kPluginSlotCount][kPluginMacroCount];
+
 static void rebuildPaletteRows()
 {
     std::vector<int> guitarIdx, vocalIdx, pluginIdx;
@@ -720,6 +732,8 @@ public:
                     break;
                 }
             }
+            triggerSaveToast("Loaded plugin: " + desc.name);
+            syncSlotPlugin(slot, true);
             repaint();
         };
 
@@ -756,6 +770,22 @@ public:
         pluginParamsModal.onParamChanged = [this](int slot, uint32_t paramId, float value) {
             if (auto* provider = getProvider())
                 provider->enqueuePluginParam(slot, paramId, value);
+
+            for (int m = 0; m < kPluginMacroCount; ++m)
+            {
+                if (sSlotMacroParams[slot][m].mapped && sSlotMacroParams[slot][m].paramId == paramId)
+                {
+                    const auto& info = sSlotMacroParams[slot][m];
+                    const float norm = (info.maxVal > info.minVal) ? std::clamp((value - info.minVal) / (info.maxVal - info.minVal), 0.0f, 1.0f) : 0.0f;
+                    const int macroParam = kParamPlugin1Macro1 + slot * 14 + m;
+                    editParameter(macroParam, true);
+                    setParameterValue(macroParam, norm);
+                    paramValues[macroParam] = norm;
+                    displayValues[macroParam] = norm;
+                    editParameter(macroParam, false);
+                    break;
+                }
+            }
         };
 
         pluginParamsModal.onMappingChanged = [this](int slot, int /*macroIdx*/, uint32_t /*paramId*/) {
@@ -764,6 +794,7 @@ public:
             const std::string mapStr = pluginParamsModal.buildMappingString();
             setState(kPluginMapStateKeys[slot], mapStr.c_str());
             stateValues[kPluginMapStateKeys[slot]] = mapStr;
+            syncSlotPlugin(slot, false);
         };
 
         reloadBuiltinPlugins();
@@ -945,6 +976,11 @@ protected:
                 {
                     if (hp->isUIOpen())
                         hp->idleUI();
+
+                    if (!slotPluginNames[s].empty() && !sSlotMacroParams[s][0].mapped && hp->getParameterCount() > 0)
+                    {
+                        syncSlotPlugin(s, false);
+                    }
                 }
             }
         }
@@ -1403,22 +1439,37 @@ protected:
                         }
                         else
                         {
-                            triggerSaveToast("Plugin has no custom GUI - opening parameter editor");
-                            const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
-                            const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
-                            pluginParamsModal.open(slot, hp, name, mappingStr);
+                            if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot)
+                            {
+                                pluginParamsModal.close();
+                            }
+                            else
+                            {
+                                const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
+                                const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
+                                const std::string fmtStr = stateValues[kPluginFormatStateKeys[slot]];
+                                pluginParamsModal.open(slot, hp, name, mappingStr, fmtStr);
+                            }
                         }
                         repaint();
                         return true;
                     }
                     if (hasPlugin && mx >= px && mx <= px + pw && my >= py && my <= py + ph)
                     {
-                        ampforge::HostedPlugin* hp = nullptr;
-                        if (auto* provider = getProvider())
-                            hp = provider->getHostedPlugin(slot);
-                        const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
-                        const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
-                        pluginParamsModal.open(slot, hp, name, mappingStr);
+                        if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot)
+                        {
+                            pluginParamsModal.close();
+                        }
+                        else
+                        {
+                            ampforge::HostedPlugin* hp = nullptr;
+                            if (auto* provider = getProvider())
+                                hp = provider->getHostedPlugin(slot);
+                            const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
+                            const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
+                            const std::string fmtStr = stateValues[kPluginFormatStateKeys[slot]];
+                            pluginParamsModal.open(slot, hp, name, mappingStr, fmtStr);
+                        }
                         repaint();
                         return true;
                     }
@@ -1600,6 +1651,26 @@ protected:
             setParameterValue(knob.paramIndex, newValue);
             paramValues[knob.paramIndex] = newValue;
             displayValues[knob.paramIndex] = newValue;
+
+            if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+            {
+                const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+                const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+                if (sub >= 6)
+                {
+                    const int m = sub - 6;
+                    if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                    {
+                        if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == s)
+                        {
+                            const auto& info = sSlotMacroParams[s][m];
+                            const float realVal = info.minVal + newValue * (info.maxVal - info.minVal);
+                            pluginParamsModal.updateParamValue(info.paramId, realVal);
+                        }
+                    }
+                }
+            }
+
             repaint();
             return true;
         }
@@ -1862,6 +1933,7 @@ protected:
                     }
                 }
                 triggerSaveToast("Loaded plugin: " + desc.name);
+                syncSlotPlugin(slot, true);
             }
         }
 
@@ -1873,6 +1945,11 @@ protected:
                     slotPluginNames[s] = std::filesystem::path(value).stem().string();
                 else
                     slotPluginNames[s].clear();
+                syncSlotPlugin(s, false);
+            }
+            if (std::strcmp(key, kPluginMapStateKeys[s]) == 0)
+            {
+                syncSlotPlugin(s, false);
             }
         }
 
@@ -1926,9 +2003,154 @@ private:
                 sBuiltinPluginNames[s].clear();
                 kPedalDefs[pedalIdx].isBuiltinPlugin = false;
             }
+            syncSlotPlugin(s, false);
         }
 
         rebuildPaletteRows();
+    }
+
+    void syncSlotPlugin(int slot, bool forceAutoMap)
+    {
+        if (slot < 0 || slot >= kPluginSlotCount)
+            return;
+
+        int pedalIdx = -1;
+        for (int p = 0; p < kPedalDefCount; ++p)
+        {
+            if (kPedalDefs[p].isExternalPlugin && kPedalDefs[p].pluginSlotIndex == slot)
+            {
+                pedalIdx = p;
+                break;
+            }
+        }
+        if (pedalIdx < 0) return;
+
+        ampforge::HostedPlugin* hp = nullptr;
+        if (auto* provider = getProvider())
+            hp = provider->getHostedPlugin(slot);
+
+        if (!hp)
+            return;
+
+        std::string mapStr = stateValues[kPluginMapStateKeys[slot]];
+        const uint32_t paramCount = hp->getParameterCount();
+
+        // If no mapping exists yet or forceAutoMap is true, auto-map the primary parameters
+        if ((mapStr.empty() || forceAutoMap) && paramCount > 0)
+        {
+            std::vector<uint32_t> candidates;
+            std::vector<uint32_t> fallback;
+
+            for (uint32_t i = 0; i < paramCount; ++i)
+            {
+                ampforge::PluginParamInfo info = hp->getParameterInfo(i);
+                std::string lower = info.name;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower.find("bypass") != std::string::npos ||
+                    lower.find("enable") != std::string::npos ||
+                    lower == "enabled")
+                {
+                    continue; // skip bypass / enable
+                }
+
+                if (!info.isBoolean && !info.isInteger)
+                {
+                    candidates.push_back(info.id);
+                }
+                else
+                {
+                    fallback.push_back(info.id);
+                }
+            }
+
+            std::vector<uint32_t> chosen;
+            for (uint32_t id : candidates)
+            {
+                if (chosen.size() >= 4) break;
+                chosen.push_back(id);
+            }
+            for (uint32_t id : fallback)
+            {
+                if (chosen.size() >= 4) break;
+                chosen.push_back(id);
+            }
+
+            std::string autoMap;
+            for (size_t m = 0; m < chosen.size(); ++m)
+            {
+                if (!autoMap.empty()) autoMap += ",";
+                autoMap += std::to_string(m) + ":" + std::to_string(chosen[m]);
+            }
+
+            if (!autoMap.empty())
+            {
+                mapStr = autoMap;
+                setState(kPluginMapStateKeys[slot], mapStr.c_str());
+                stateValues[kPluginMapStateKeys[slot]] = mapStr;
+            }
+        }
+
+        // Reset all macros for this slot
+        for (int m = 0; m < kPluginMacroCount; ++m)
+        {
+            sSlotMacroParams[slot][m] = SlotMacroParamInfo{};
+            if (m < 4 && 3 + m < static_cast<int>(kPedalDefs[pedalIdx].knobs.size()))
+            {
+                static const char* const kDefaultLabels[4] = { "M1", "M2", "M3", "M4" };
+                kPedalDefs[pedalIdx].knobs[3 + m].label = kDefaultLabels[m];
+                kPedalDefs[pedalIdx].knobs[3 + m].unit = "";
+            }
+        }
+
+        // Parse mapping and populate knob metadata
+        if (!mapStr.empty())
+        {
+            std::istringstream ss(mapStr);
+            std::string pair;
+            while (std::getline(ss, pair, ','))
+            {
+                const auto colon = pair.find(':');
+                if (colon == std::string::npos) continue;
+                try {
+                    int m = std::stoi(pair.substr(0, colon));
+                    uint32_t pid = static_cast<uint32_t>(std::stoul(pair.substr(colon + 1)));
+                    if (m >= 0 && m < kPluginMacroCount)
+                    {
+                        ampforge::PluginParamInfo info = hp->getParameterInfo(pid);
+                        sSlotMacroParams[slot][m].name = info.name;
+                        sSlotMacroParams[slot][m].unit = info.unit;
+                        sSlotMacroParams[slot][m].minVal = info.minValue;
+                        sSlotMacroParams[slot][m].maxVal = info.maxValue;
+                        sSlotMacroParams[slot][m].defVal = info.defaultValue;
+                        sSlotMacroParams[slot][m].decimals = info.isInteger ? 0 : ((info.maxValue - info.minValue > 10.0f) ? 1 : 2);
+                        sSlotMacroParams[slot][m].paramId = pid;
+                        sSlotMacroParams[slot][m].mapped = true;
+
+                        if (m < 4 && 3 + m < static_cast<int>(kPedalDefs[pedalIdx].knobs.size()))
+                        {
+                            kPedalDefs[pedalIdx].knobs[3 + m].label = sSlotMacroParams[slot][m].name.c_str();
+                            kPedalDefs[pedalIdx].knobs[3 + m].unit = sSlotMacroParams[slot][m].unit.c_str();
+                        }
+
+                        // If forceAutoMap, sync initial parameter value from plugin
+                        if (forceAutoMap)
+                        {
+                            const float curVal = hp->getParameterValue(pid);
+                            const float norm = (info.maxValue > info.minValue)
+                                ? std::clamp((curVal - info.minValue) / (info.maxValue - info.minValue), 0.0f, 1.0f)
+                                : 0.0f;
+                            const int macroParam = kParamPlugin1Macro1 + slot * 14 + m;
+                            editParameter(macroParam, true);
+                            setParameterValue(macroParam, norm);
+                            paramValues[macroParam] = norm;
+                            displayValues[macroParam] = norm;
+                            editParameter(macroParam, false);
+                        }
+                    }
+                } catch (...) {}
+            }
+        }
+        repaint();
     }
     // Reads just enough of the front of a .nam file to pull out its
     // top-level "architecture" field ("WaveNet", "LSTM", "SlimmableContainer"
@@ -2930,11 +3152,30 @@ private:
 
         const KnobDef& knob = resolveKnob(pedalIndex, knobIndex);
         float shown = paramValues[knob.paramIndex];
-        if (knob.asPercent)
+        int dec = knob.decimals;
+
+        if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+        {
+            const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+            const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+            if (sub >= 6)
+            {
+                const int m = sub - 6;
+                if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                {
+                    shown = sSlotMacroParams[s][m].minVal + shown * (sSlotMacroParams[s][m].maxVal - sSlotMacroParams[s][m].minVal);
+                    dec = sSlotMacroParams[s][m].decimals;
+                }
+            }
+        }
+        else if (knob.asPercent)
+        {
             shown *= 100.0f;
+            dec = 0;
+        }
 
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.*f", knob.asPercent ? 0 : knob.decimals, shown);
+        std::snprintf(buf, sizeof(buf), "%.*f", dec, shown);
         knobEditBuffer = buf;
         knobEditFresh = true;
         repaint();
@@ -2949,14 +3190,37 @@ private:
         if (!knobEditBuffer.empty() && knobEditBuffer != "-")
         {
             float typed = std::strtof(knobEditBuffer.c_str(), nullptr);
-            if (knob.asPercent)
-                typed *= 0.01f;
-            typed = std::max(knob.minVal, std::min(knob.maxVal, typed));
+            float finalVal = typed;
+
+            if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+            {
+                const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+                const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+                if (sub >= 6)
+                {
+                    const int m = sub - 6;
+                    if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                    {
+                        const auto& info = sSlotMacroParams[s][m];
+                        typed = std::clamp(typed, info.minVal, info.maxVal);
+                        finalVal = (info.maxVal > info.minVal) ? (typed - info.minVal) / (info.maxVal - info.minVal) : 0.0f;
+                    }
+                }
+            }
+            else if (knob.asPercent)
+            {
+                finalVal *= 0.01f;
+                finalVal = std::clamp(finalVal, knob.minVal, knob.maxVal);
+            }
+            else
+            {
+                finalVal = std::clamp(finalVal, knob.minVal, knob.maxVal);
+            }
 
             editParameter(knob.paramIndex, true);
-            setParameterValue(knob.paramIndex, typed);
-            paramValues[knob.paramIndex] = typed;
-            displayValues[knob.paramIndex] = typed;
+            setParameterValue(knob.paramIndex, finalVal);
+            paramValues[knob.paramIndex] = finalVal;
+            displayValues[knob.paramIndex] = finalVal;
             editParameter(knob.paramIndex, false);
         }
 
@@ -4040,6 +4304,23 @@ private:
 
     void formatKnobValue(const KnobDef& knob, float value, char* buf, size_t bufSize) const
     {
+        if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+        {
+            const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+            const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+            if (sub >= 6)
+            {
+                const int m = sub - 6;
+                if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                {
+                    const auto& info = sSlotMacroParams[s][m];
+                    const float realVal = info.minVal + value * (info.maxVal - info.minVal);
+                    std::snprintf(buf, bufSize, "%.*f%s%s", info.decimals, realVal, info.unit.empty() ? "" : " ", info.unit.c_str());
+                    return;
+                }
+            }
+        }
+
         if (knob.isSyncDivision)
         {
             const int idx = std::clamp(static_cast<int>(std::round(value)), 0, kSyncDivisionCount - 1);
@@ -6734,7 +7015,7 @@ private:
                     const bool guiHover = (lastMouseX >= gx && lastMouseX <= gx + gw &&
                                            lastMouseY >= gy && lastMouseY <= gy + gh);
                     const bool hasGui = (hp && hp->hasCustomUI());
-                    const bool uiOpen = (hp && hp->isUIOpen());
+                    const bool uiOpen = (hp && hp->isUIOpen()) || (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot);
 
                     beginPath();
                     roundedRect(gx, gy, gw, gh, 4.0f);
@@ -6772,22 +7053,29 @@ private:
                     // Params button
                     const bool paramsHover = (lastMouseX >= px && lastMouseX <= px + pw &&
                                               lastMouseY >= py && lastMouseY <= py + ph);
+                    const bool paramsOpen = (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot);
                     beginPath();
                     roundedRect(px, py, pw, ph, 4.0f);
-                    fillColor((paramsHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
+                    if (paramsOpen)
+                        fillColor(Color(255, 180, 80, 0.45f * alpha));
+                    else
+                        fillColor((paramsHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
                     fill();
                     closePath();
                     beginPath();
                     roundedRect(px, py, pw, ph, 4.0f);
                     strokeWidth(1.0f);
-                    strokeColor(Color(255, 255, 255, (paramsHover ? 0.45f : 0.22f) * alpha));
+                    if (paramsOpen)
+                        strokeColor(Color(255, 200, 100, 0.9f * alpha));
+                    else
+                        strokeColor(Color(255, 255, 255, (paramsHover ? 0.45f : 0.22f) * alpha));
                     stroke();
                     closePath();
 
                     fontSize(11.0f);
-                    fillColor(Color(255, 255, 255, (paramsHover ? 1.0f : 0.85f) * alpha));
+                    fillColor(Color(255, 255, 255, (paramsHover || paramsOpen ? 1.0f : 0.85f) * alpha));
                     textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
-                    text(px + pw * 0.5f, py + ph * 0.5f, "Params", nullptr);
+                    text(px + pw * 0.5f, py + ph * 0.5f, paramsOpen ? "Params \xe2\x97\x8f" : "Params", nullptr);
                 }
 
                 // Browse / Change button

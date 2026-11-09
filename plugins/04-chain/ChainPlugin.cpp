@@ -1863,6 +1863,40 @@ protected:
             }
             pluginNodes[s].setName(p->getName());
             pluginNodes[s].setPlugin(std::move(p));
+
+            bool allUnmapped = true;
+            for (int m = 0; m < kPluginMacroCount; ++m)
+            {
+                if (pluginSlots[s].macroMap[m] != 0xFFFFFFFF)
+                {
+                    allUnmapped = false;
+                    break;
+                }
+            }
+            if (allUnmapped && !pluginSlots[s].mapJson.empty())
+            {
+                parsePluginMap(s, pluginSlots[s].mapJson);
+                allUnmapped = false;
+            }
+            if (allUnmapped)
+            {
+                ampforge::HostedPlugin* active = pluginNodes[s].getActivePlugin();
+                if (active)
+                {
+                    const uint32_t count = active->getParameterCount();
+                    int m = 0;
+                    for (uint32_t i = 0; i < count && m < kPluginMacroCount; ++i)
+                    {
+                        auto info = active->getParameterInfo(i);
+                        std::string lower = info.name;
+                        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                        if (lower.find("bypass") != std::string::npos || lower.find("enable") != std::string::npos)
+                            continue;
+                        pluginSlots[s].macroMap[m++] = info.id;
+                    }
+                }
+            }
+
             applyMacroMappingsToPlugin(s);
         }
     }

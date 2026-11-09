@@ -17,10 +17,12 @@ public:
     PluginParamsModal();
     ~PluginParamsModal();
 
-    void open(int slotIndex, HostedPlugin* plugin, const std::string& name, const std::string& mappingStr);
+    void open(int slotIndex, HostedPlugin* plugin, const std::string& name, const std::string& mappingStr, const std::string& format = "");
     void close();
     bool isOpen() const { return openFlag; }
     int getTargetSlot() const { return targetSlot; }
+
+    void updateParamValue(uint32_t paramId, float value);
 
     std::string buildMappingString() const;
 
@@ -45,6 +47,7 @@ private:
     bool openFlag = false;
     int targetSlot = 0;
     std::string pluginTitle;
+    std::string pluginFormat;
     std::vector<ParamRow> rows;
 
     float scrollY = 0.0f;

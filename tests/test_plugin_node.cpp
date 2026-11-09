@@ -247,3 +247,23 @@ AMPFORGE_TEST(plugin_node_save_and_restore_state)
     CHECK(p2.loadState(state));
     CHECK_NEAR(p2.getParameterValue(0), 3.5f, 0.001f);
 }
+
+AMPFORGE_TEST(plugin_macro_mapping_and_param_sync)
+{
+    ampforge::PluginNodeBlock node;
+    node.setSampleRate(44100.0);
+    auto p = std::make_unique<MockGainPlugin>(1.0f);
+    auto* rawP = p.get();
+    node.setPlugin(std::move(p));
+
+    CHECK(node.hasPlugin());
+    CHECK_NEAR(rawP->getParameterValue(0), 1.0f, 1e-4f);
+
+    // Queue update using real value
+    node.enqueueParameterUpdate(0, 4.5f);
+    std::vector<float> buf(64, 0.5f);
+    node.processBlock(buf.data(), 64);
+
+    CHECK_NEAR(rawP->getParameterValue(0), 4.5f, 1e-4f);
+    CHECK_NEAR(buf[0], 0.5f * 4.5f, 1e-4f);
+}
