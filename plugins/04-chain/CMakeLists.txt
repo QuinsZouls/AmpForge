@@ -4,7 +4,8 @@ dpf_add_plugin(ampforge_main
   FILES_DSP
     ChainPlugin.cpp
   FILES_UI
-    ChainUI.cpp)
+    ChainUI.cpp
+    JackIo.cpp)
 
 target_include_directories(ampforge_main PUBLIC "." "../../core")
 
