@@ -3,6 +3,7 @@
 #include "Biquad.hpp"
 
 #include <cmath>
+#include <limits>
 
 /*
  * Biquad is the RBJ-cookbook filter behind the EQ module and the Wah's
@@ -152,4 +153,60 @@ AMPFORGE_TEST(biquad_stays_finite_and_decays_to_silence)
     }
 
     CHECK_NEAR(output, 0.0f, 1e-6f);
+}
+
+// --- extreme parameters are refused, not turned into noise --------------
+//
+// setParams() sanitises its inputs because not every caller clamps: a host (or
+// the JACK standalone, which forwards whatever it is handed) can ask for a gain
+// no filter can mean, and a corrupt preset file parsed with strtof can deliver
+// "inf" or "nan" straight in. Two distinct failure modes are covered here:
+//
+//  - an absurd gain: RBJ's A = 10^(gain/40) makes +200 dB a factor of ~1e5 per
+//    coefficient pair, i.e. an impulse that comes out at 1e7. Clamped to ±30 dB,
+//    which is still far outside what the UI offers (±24 dB).
+//  - an absurd Q: at Q = 1e6 the denominator's rounding decides stability and
+//    the "decay" leaves a tail that never dies. Clamped to <= 20.
+AMPFORGE_TEST(biquad_extreme_parameters_do_not_blow_up)
+{
+    const float extremeGains[] = { 200.0f, -200.0f, std::numeric_limits<float>::infinity(),
+                                   std::numeric_limits<float>::quiet_NaN() };
+    for (float gain : extremeGains)
+    {
+        ampforge::Biquad filter;
+        filter.setSampleRate(kSampleRate);
+        filter.setParams(ampforge::Biquad::Type::HighShelf, 5000.0f, gain, 0.7f);
+
+        // Impulse, then long silence: bounded and decaying.
+        float peak = std::fabs(filter.process(1.0f));
+        for (int n = 0; n < 48000; ++n)
+        {
+            const float y = filter.process(0.0f);
+            CHECK_FINITE(y);
+            peak = std::max(peak, std::fabs(y));
+        }
+        // A ±30 dB shelf can move an impulse by ~30x at most; anything in the
+        // thousands means the clamp did not happen.
+        CHECK(peak < 100.0f);
+        CHECK_NEAR(filter.process(0.0f), 0.0f, 1e-4f);
+    }
+
+    // Same for Q, on the type where it matters (a peak's Q sets its width).
+    const float extremeQs[] = { 1.0e6f, 1.0e30f, 0.0f, -3.0f,
+                                std::numeric_limits<float>::quiet_NaN() };
+    for (float q : extremeQs)
+    {
+        ampforge::Biquad filter;
+        filter.setSampleRate(kSampleRate);
+        filter.setParams(ampforge::Biquad::Type::Peak, 1000.0f, 12.0f, q);
+
+        float peak = std::fabs(filter.process(1.0f));
+        for (int n = 0; n < 48000; ++n)
+        {
+            const float y = filter.process(0.0f);
+            CHECK_FINITE(y);
+            peak = std::max(peak, std::fabs(y));
+        }
+        CHECK(peak < 100.0f);
+    }
 }

@@ -71,6 +71,17 @@ START_NAMESPACE_DISTRHO
 // decay-tracking verification above already checked - the voicing changes
 // the EQ curve and clipping asymmetry a preset gets, not how hard it's
 // actually being driven beyond what was already verified.
+//
+// Note on the five values each preset's list now ends with: NAM's
+// bass/mid/treble/presence/quality. They are not optional the way the
+// output-only parameters (Input Level, CPU Load, Tuner Frequency, Buffer
+// Size, Sample Rate) are - those live at the end of the Parameters enum and
+// are simply left zero-initialized here, because a preset never sets a meter.
+// Quality is different: 0.0f would mean "the cheapest, smallest A2 submodel"
+// - the worst-sounding setting - not "the old behaviour". So all three
+// presets spell the five out explicitly: the four tone bands neutral (0dB)
+// and Quality at 1.0 (full size), which together are exactly what NamBlock
+// did before those controls existed.
 static constexpr uint32_t kProgramCount = 3;
 
 struct PresetDefinition
@@ -117,6 +128,7 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+            /* NAM bass,mid,treble,presence,quality */ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
         }
     },
 
@@ -157,6 +169,7 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+            /* NAM bass,mid,treble,presence,quality */ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
         }
     },
 
@@ -200,6 +213,7 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+            /* NAM bass,mid,treble,presence,quality */ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
         }
     },
 };
