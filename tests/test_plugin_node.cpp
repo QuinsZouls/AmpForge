@@ -85,7 +85,7 @@ AMPFORGE_TEST(plugin_node_passthrough_when_empty)
     node.setSampleRate(44100.0);
 
     float buf[4] = { 0.1f, -0.2f, 0.5f, -0.8f };
-    node.processBlock(buf, 4);
+    node.processBlock(buf, buf, 4);
 
     CHECK_NEAR(buf[0], 0.1f, 1e-6f);
     CHECK_NEAR(buf[1], -0.2f, 1e-6f);
@@ -102,7 +102,7 @@ AMPFORGE_TEST(plugin_node_processes_mock_plugin)
     CHECK(node.setPlugin(std::move(plugin)));
 
     float buf[4] = { 0.1f, -0.2f, 0.5f, -0.8f };
-    node.processBlock(buf, 4);
+    node.processBlock(buf, buf, 4);
 
     CHECK_NEAR(buf[0], 0.3f, 1e-6f);
     CHECK_NEAR(buf[1], -0.6f, 1e-6f);
@@ -121,13 +121,13 @@ AMPFORGE_TEST(plugin_node_wet_dry_mix_and_trims)
     // 50% mix: dry = 1.0, wet = 2.0 -> mixed = 1.5
     node.setMix(0.5f);
     float buf[1] = { 1.0f };
-    node.processBlock(buf, 1);
+    node.processBlock(buf, buf, 1);
     CHECK_NEAR(buf[0], 1.5f, 1e-5f);
 
     // 0% mix: pure dry
     node.setMix(0.0f);
     buf[0] = 1.0f;
-    node.processBlock(buf, 1);
+    node.processBlock(buf, buf, 1);
     CHECK_NEAR(buf[0], 1.0f, 1e-5f);
 
     // 100% mix with +6dB inTrim and -6dB outTrim
@@ -136,7 +136,7 @@ AMPFORGE_TEST(plugin_node_wet_dry_mix_and_trims)
     node.setOutputTrim(-6.0206f); // * 0.5
     // wet = (in * 2.0) * plugin_gain(2.0) * outTrim(0.5) = in * 2.0
     buf[0] = 1.0f;
-    node.processBlock(buf, 1);
+    node.processBlock(buf, buf, 1);
     CHECK_NEAR(buf[0], 2.0f, 1e-3f);
 }
 
@@ -152,7 +152,7 @@ AMPFORGE_TEST(plugin_node_parameter_queue_drains_on_audio_thread)
     node.enqueueParameterUpdate(0, 5.0f);
 
     float buf[1] = { 1.0f };
-    node.processBlock(buf, 1);
+    node.processBlock(buf, buf, 1);
 
     CHECK_NEAR(rawPtr->gain, 5.0f, 1e-5f);
     CHECK_NEAR(buf[0], 5.0f, 1e-5f);
@@ -174,19 +174,19 @@ AMPFORGE_TEST(plugin_node_nan_protection_and_autobypass)
     // Process 4 bad blocks: should replace with 0 and not auto-bypass yet
     for (int i = 0; i < 4; ++i) {
         buf[0] = 1.0f;
-        node.processBlock(buf, 4);
+        node.processBlock(buf, buf, 4);
         CHECK(!node.isAutoBypassed());
         CHECK(!std::isnan(buf[0]));
     }
 
     // 5th bad block triggers auto-bypass
     buf[0] = 1.0f;
-    node.processBlock(buf, 4);
+    node.processBlock(buf, buf, 4);
     CHECK(node.isAutoBypassed());
 
     // Once auto-bypassed, it safely passes through dry audio untouched
     buf[0] = 0.77f;
-    node.processBlock(buf, 1);
+    node.processBlock(buf, buf, 1);
     CHECK_NEAR(buf[0], 0.77f, 1e-5f);
 }
 
@@ -201,7 +201,7 @@ AMPFORGE_TEST(plugin_node_buffer_chunking)
     // Default max block is 2048, pass 3000 frames
     constexpr uint32_t kLargeSize = 3000;
     std::vector<float> buf(kLargeSize, 0.5f);
-    node.processBlock(buf.data(), kLargeSize);
+    node.processBlock(buf.data(), buf.data(), kLargeSize);
 
     for (uint32_t i = 0; i < kLargeSize; ++i) {
         CHECK_NEAR(buf[i], 1.0f, 1e-5f);
@@ -220,7 +220,7 @@ AMPFORGE_TEST(plugin_node_concurrent_swap_and_retirement)
     std::thread audioThread([&]() {
         std::vector<float> buf(128, 0.1f);
         while (!stop.load(std::memory_order_relaxed)) {
-            node.processBlock(buf.data(), 128);
+            node.processBlock(buf.data(), buf.data(), 128);
         }
     });
 
@@ -262,7 +262,7 @@ AMPFORGE_TEST(plugin_macro_mapping_and_param_sync)
     // Queue update using real value
     node.enqueueParameterUpdate(0, 4.5f);
     std::vector<float> buf(64, 0.5f);
-    node.processBlock(buf.data(), 64);
+    node.processBlock(buf.data(), buf.data(), 64);
 
     CHECK_NEAR(rawP->getParameterValue(0), 4.5f, 1e-4f);
     CHECK_NEAR(buf[0], 0.5f * 4.5f, 1e-4f);

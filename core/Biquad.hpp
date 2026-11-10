@@ -1,5 +1,6 @@
 #pragma once
 #include "Denormal.hpp"
+#include <algorithm>
 #include <cmath>
 
 /*
@@ -20,16 +21,55 @@ class Biquad
 public:
     enum class Type { LowShelf, Peak, HighShelf, HighPass };
 
-    void setSampleRate(double sr) { sampleRate = sr; }
+    // Guarded because the coefficients below divide by it: a 0 here (an
+    // uninitialised host field, or a block whose setSampleRate() is called
+    // before the chain's) makes w0 infinite and every coefficient NaN, which
+    // process() would then smear over the rest of the session. Falling back to
+    // the usual rate is the least surprising thing to do - the filter still
+    // works, just at the wrong centre frequency until the real rate arrives.
+    void setSampleRate(double sr)
+    {
+        sampleRate = (sr > 0.0 && std::isfinite(sr)) ? sr : 44100.0;
+    }
 
     // freq: center/cutoff frequency (Hz)
     // gainDB: how much this band is boosted/cut (dB)
     // q: how "narrow/wide" the band is (matters for Peak, kept fixed for shelves)
     void setParams(Type type, float freq, float gainDB, float q)
     {
-        const double A     = std::pow(10.0, gainDB / 40.0);
-        const double w0    = 2.0 * M_PI * freq / sampleRate;
-        const double alpha = std::sin(w0) / (2.0 * q);
+        // Sanitised before any trigonometry, for two separate reasons:
+        //
+        //  - Nyquist. The RBJ formulas only produce a stable filter for
+        //    0 < w0 < pi. Above Nyquist w0 > pi, alpha goes negative and the
+        //    shelves' poles leave the unit circle - at an 8 kHz project rate
+        //    this class's own 5 kHz Presence band has poles at radius 1.5,
+        //    i.e. a boost knob that runs away to full-scale noise instead of
+        //    boosting. 0.45*sr keeps every band inside the stable region with
+        //    a little room for the shelves' transition width.
+        //  - Non-finite input. A NaN gain or Q (a corrupt preset, a host
+        //    sending garbage) would otherwise poison the coefficients for the
+        //    rest of the session; std::clamp and friends pass NaN straight
+        //    through, so it has to be tested explicitly.
+        const double sr = sampleRate;
+        const double safeFreq = std::isfinite(freq)
+            ? std::clamp(static_cast<double>(freq), 1.0, sr * 0.45)
+            : 1000.0;
+        // Q and gain are bounded too, for the same class of reason:
+        //  - Q below ~0.05 or above ~20 is not a filter anyone asked for, and
+        //    at extreme Q the denominator's rounding decides stability (Q=1e6
+        //    leaves a 1e-6 tail that never decays; Q=1e30 only survives because
+        //    of coefficient rounding, which is not a property to rely on).
+        //  - an absurd gain is the "1e26 times the input" case: an EQ block fed
+        //    200 dB would otherwise ask for it, and only NamBlock's own setters
+        //    clamp today. Bounding it here is the backstop every caller gets,
+        //    including the ones that don't clamp (AmpBlock, EqBlock).
+        // Both limits sit well outside what the UI offers (±24 dB, Q <= 2).
+        const double safeQ    = std::isfinite(q) ? std::clamp(static_cast<double>(q), 0.05, 20.0) : 0.707;
+        const double safeGain = std::isfinite(gainDB) ? std::clamp(static_cast<double>(gainDB), -30.0, 30.0) : 0.0;
+
+        const double A     = std::pow(10.0, safeGain / 40.0);
+        const double w0    = 2.0 * M_PI * safeFreq / sr;
+        const double alpha = std::sin(w0) / (2.0 * safeQ);
         const double cosw0 = std::cos(w0);
 
         double b0, b1, b2, a0, a1, a2;
@@ -120,11 +160,40 @@ public:
     float process(float x)
     {
         const float y = c_b0*x + c_b1*x1 + c_b2*x2 - c_a1*y1 - c_a2*y2;
-        x2 = x1; x1 = x;
+
+        // A single non-finite sample would otherwise poison this filter for
+        // good: Direct Form I feeds y back into itself, so a NaN (or an Inf)
+        // makes every subsequent output NaN - and flushDenormal() below does
+        // not catch either (all comparisons against NaN are false). Recovering
+        // by clearing the history is the only option that keeps the rest of the
+        // session working, and it is what a hardware EQ would do if it could.
+        // Reachable in practice: a host can send a NaN parameter, and a corrupt
+        // preset file is parsed with strtof, which happily accepts "nan".
+        if (!std::isfinite(y))
+        {
+            reset();
+            return 0.0f;
+        }
+
+        x2 = x1; x1 = flushDenormal(x);
         // Flushed so the filter's ring-down after the input goes silent
         // can't leave y1/y2 stuck as denormals (see Denormal.hpp).
         y2 = y1; y1 = flushDenormal(y);
         return y;
+    }
+
+    // Clears the sample history (x1/x2/y1/y2) but keeps the coefficients
+    // setParams() computed. Same reasoning as AudioBlock::reset() (see its
+    // comment): while the block owning this filter is disabled it simply
+    // isn't advanced, so this filter's history freezes mid-ring-down - the
+    // moment it's switched back on, process() would resume that stale
+    // tail (a leftover chunk of an entirely different preset's audio)
+    // before any fresh signal got through. Zeroing the history instead
+    // makes the filter start from silence, behaving exactly like a freshly
+    // constructed one.
+    void reset()
+    {
+        x1 = 0.0f; x2 = 0.0f; y1 = 0.0f; y2 = 0.0f;
     }
 
 private:

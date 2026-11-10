@@ -324,6 +324,47 @@ enum Parameters
     kParamExciterAmount,
     kParamExciterBypass,
 
+    // NAM's guitar-amp controls - the tone knobs a real amp has and a .nam
+    // capture does not, plus A2's CPU/accuracy trade-off.
+    //
+    // The tone stack is NamBlock's own (core/NamBlock.hpp, core/ToneStack.hpp):
+    // Bass/Mid/Treble/Presence, same filter types, centers and Q as
+    // AmpBlock's "Modern" voicing (kAmpVoicings[0]) and the same dB units as
+    // the Amp parameters above, so the two blocks' tone controls feel
+    // identical. That is what makes the NAM node read like an amp rather than
+    // like a bare capture: a .nam file has its amp's tone stack baked into the
+    // recording, so without these the player loses all four knobs.
+    //
+    // Quality is the A2 "slimmable" model size: 1.0 = full size (the only
+    // behaviour that existed before this parameter), 0.0 = the smallest and
+    // cheapest submodel, and it is a no-op for every non-A2 capture.
+    //
+    // Why these five sit here rather than next to kParamNamOn with the rest
+    // of the NAM block: appending is mandatory, exactly like every earlier
+    // addition in this enum. Inserting them next to kParamNamOn would
+    // renumber every parameter after it, which shifts existing DAW
+    // automation lanes, saved sessions and older preset files onto the wrong
+    // controls. They are *not* at the literal end of the enum only because
+    // the output-only meters below have to be (see their own comment) - what
+    // matters is that every automatable parameter comes before them.
+    // (The append-only rule is also why the *display* names of
+    // kParamNamInputTrim/kParamNamOutputLevel were changed to "NAM Gain"/
+    // "NAM Master" rather than their symbols - nam_input_trim and
+    // nam_output_level keep their values and both indices untouched, because
+    // some hosts key saved automation/sessions by symbol.)
+    //
+    // All five default to neutral/1.0 - 0dB on the four tone knobs, full size
+    // on Quality - which is precisely the state NamBlock had before they
+    // existed, so every preset and session saved earlier sounds exactly the
+    // same. (Note this is also why they are *not* left to zero-init in the
+    // factory presets in ChainPresets.hpp: 0.0f on Quality would mean "the
+    // cheapest, worst-sounding submodel", not "the old behaviour".)
+    kParamNamBass,
+    kParamNamMid,
+    kParamNamTreble,
+    kParamNamPresence,
+    kParamNamQuality,
+
     // Output-only meters (kParameterIsOutput) - deliberately grouped here,
     // all together at the very end, rather than appended next to the
     // input/feature they each report on (which is where they originally
@@ -335,8 +376,35 @@ enum Parameters
     // subject on the second one, which is invalid Turtle syntax (verified
     // with lv2_validate: Carla's own lilv-based loader shrugs it off and
     // loads the plugin fine, but it leaves the host's *own* separate LV2
-    // preset browser broken/empty for that bundle). Clustering all three
-    // here avoids that entirely.
+    // preset browser broken/empty for that bundle). Hence: every
+    // automatable parameter must come before this group, and nothing may
+    // ever be appended after it.
+    //
+    // That rule is why the NAM tone/quality parameters above were added
+    // *ahead* of this group rather than at the literal end of the enum, and
+    // why this group moved down by five slots. Appending them after
+    // kParamSampleRate was the first thing tried and it does break the
+    // export exactly as described: presets.ttl came out with the NAM
+    // parameters as a second, subject-less "[ ... ] ." statement. Moving
+    // these five instead is safe in a way moving anything else would not
+    // be: they are output-only - not automatable, never part of a preset
+    // (see ChainPresets.hpp's comment), and re-read from the DSP every
+    // block - so renumbering them cannot strand a saved automation lane or
+    // session on the wrong control. Their own order and meaning are
+    // unchanged.
+    //
+    // KNOWN VIOLATION of that rule, inherited from the plugin-hosting change
+    // and deliberately not fixed here: the external-plugin slots
+    // (kParamPlugin1On onwards, further down) were appended *after* this
+    // group, so they do split the preset export exactly as described above -
+    // "nothing may ever be appended after it" now reads as a rule that has
+    // already been broken once. The fix is to move that whole block above
+    // kParamInputLevel, which cannot strand a saved automation lane as long as
+    // the plugin feature has not shipped: it is one contiguous renumbering of
+    // parameters that were introduced together. It is left out of this change
+    // on purpose - the NAM parameters above do not care where the plugin slots
+    // live, and relocating 112 unrelated parameters (plus their preset columns)
+    // belongs with the plugin feature, not with NAM's tone stack.
     //
     // Input Level - the post-trim peak level, reported back to the UI so
     // players can see how hot their signal is while dialing Input Gain
@@ -595,7 +663,7 @@ static const char* const kNamModelStateKey = "nam_model_path";
 // delivered it, so on the two most commonly used formats the status
 // sidebar never heard about a successful load, and a failed one never got
 // a toast. Both are now derived entirely client-side in ChainUI.cpp
-// (see readNamArchitecture()) by reading the .nam file directly off of
+// (see readNamFileInfo()) by reading the .nam file directly off of
 // the path in kNamModelStateKey below - a path ChainUI always has
 // correctly, on every format, since DPF's file-browser glue echoes it to
 // the UI directly rather than through this plugin-initiated push.

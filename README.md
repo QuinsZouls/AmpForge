@@ -69,12 +69,16 @@ com.apple.quarantine` on whatever you copied to get past Gatekeeper's
   whole signal.
 - **Neural Amp Modeler (NAM) support** — load a `.nam` capture file
   (both the original and newer A2 architectures) into its own block,
-  independent from the modeled Amp/Cabinet chain — mix, input trim,
-  and output trim knobs let you blend it in, and the status sidebar
-  shows the loaded capture's filename and architecture (WaveNet, LSTM,
-  ...). NAM inference is CPU-heavier than the rest of the chain
-  combined, especially with larger WaveNet captures — expect a real
-  jump in CPU usage once a model is loaded.
+  independent from the modeled Amp/Cabinet chain, with a proper amp
+  panel on top: Gain, Bass/Mid/Treble/Presence, Master and Mix. A2
+  captures also get a **Size** knob (A2's own CPU/accuracy trade-off:
+  one file, several model sizes), the status sidebar shows the loaded
+  capture's filename, architecture and sample rate, and NAM's A2
+  fast path is enabled at build time. Inference is batched per audio
+  block rather than per sample, which on a real capture measures
+  6-10x cheaper (see `core/NamBlock.hpp`). NAM is still the heaviest
+  thing in the chain, so expect a real jump in CPU usage once a model
+  is loaded — but a fraction of what it used to be.
 - **4 Amp Type voicings** (Modern, Vintage, Crunch, Hi-Gain) — distinct
   EQ centers, headroom, and clip character per type; "Modern" is the
   default and matches the Amp block's original fixed behavior exactly.
@@ -429,9 +433,15 @@ What each pedal does and what its knobs actually change, in plain terms
   capture of one specific real amp/pedal/cab, as an independent tone
   source alongside (not instead of) the Amp/Cabinet above. Needs its own
   model file loaded first — see [Loading a NAM
-  capture](#loading-a-nam-capture) below. **In**: input trim before the
-  model (it expects a clean, unprocessed signal). **Mix**: dry/wet blend.
-  **Out**: output trim.
+  capture](#loading-a-nam-capture) below. A `.nam` capture already has
+  its amp's own tone stack baked into the recording, so this block puts
+  a standard amp panel back on top of it: **Gain** (input trim into the
+  model — it expects a clean, unprocessed signal), **Bass**, **Mid**,
+  **Treble**, **Presence** (post-model, boost-only, same filter
+  types/centers as the Amp block's "Modern" voicing), **Master** (output
+  trim), **Mix** (dry/wet blend), and **Size** (A2 captures only — see
+  below; dimmed when the loaded capture doesn't carry multiple model
+  sizes).
 - **Chorus** — thickens the sound with a constantly-wobbling delayed
   copy mixed in, for a "multiple instruments at once" effect. **Rate**:
   how fast the wobble moves. **Depth**: how far it wobbles. **Mix**:
@@ -523,17 +533,58 @@ survives a reload as long as the file stays at the same path on disk.
 The status sidebar confirms what's loaded — filename and architecture
 (WaveNet, LSTM, the A2 "SlimmableContainer" wrapper, ...).
 
+Both of NAM's own capture formats work: the original architecture
+(WaveNet/LSTM/ConvNet/Linear `.nam` files, "A1") and the newer **A2**
+format, where one file carries several model sizes of the same capture
+("SlimmableContainer"). A2 captures additionally get a **Size** knob:
+
+- **Size at 100%** (the default) runs the capture's largest, most
+  accurate network — the same result you'd get in NAM's own plugin with
+  its size slider all the way up.
+- Turning it **down** switches to a smaller network from the same file:
+  less CPU, slightly less accuracy. That's A2's whole point — a single
+  capture you can trade quality for headroom on, e.g. several instances
+  in a busy project.
+- For a non-A2 capture the knob is dimmed and does nothing, because
+  there is only one network in the file to run.
+
+A2 captures also run through NAM's own fast-path implementation, which
+AmpForge enables at build time: same audio (a null test against the
+generic path differs only in the last bits of float rounding), and
+about 1.15x cheaper on a full-size submodel — up to ~1.85x on a small
+one. A modest win, honestly measured: the large one is block batching,
+not this (see `core/NamBlock.hpp` and the comment on
+`NAM_ENABLE_A2_FAST` in `CMakeLists.txt`).
+
+One thing worth knowing: NAM models are trained at a fixed sample rate
+(most of them at 48 kHz) and AmpForge runs them at whatever rate your
+project uses. If those differ, the capture isn't resampled — it just
+runs at the project's rate, which shifts its frequency response a
+little. The status sidebar shows the model's own rate next to your
+project's so you can see when the two disagree; running the project at
+the same rate the capture was trained at gives you exactly what its
+author heard.
+
 ## Project status
 
 The DSP engine (all 19 modules, the reorderable chain, factory
 presets) and the pedalboard UI are both functional and usable today.
 Known gaps, tracked for future work:
 
-- The NAM block runs inference one audio sample at a time rather than
-  batched per-block (see `core/NamBlock.hpp`'s comment on why), which
-  gives up some of NAM's own internal batching efficiency - fine for a
-  single real-time instance, but a future optimization target if CPU
-  cost ever becomes a problem.
+- The NAM block runs its inference one *block* at a time now (the chain
+  hands it the host's buffer, and it splits that into chunks sized to
+  what NAM was initialised for), which is where NAM's own internal
+  batching efficiency comes from — measured on a real A2 capture, that
+  alone is worth 6-10x over the old one-sample-at-a-time path, and A2's
+  fast path adds a further 1.15-1.85x on top for A2 captures. See
+  `core/NamBlock.hpp`'s comment.
+- NAM captures are not resampled: a capture trained at 48 kHz played
+  back in a 44.1 kHz project runs at 44.1 kHz rather than being
+  resampled to it, which shifts its frequency response slightly. The
+  status sidebar shows both rates so the mismatch is visible. NAM's own
+  plugin does resample; doing the same here needs a resampler dependency
+  this project doesn't carry yet, so it's tracked as future work rather
+  than silently pretending the rates always match.
 - The Cabinet block's convolution is a straightforward direct
   time-domain implementation, not an FFT-partitioned one — plenty fast
   enough for a single instance at the IR lengths a speaker cab actually
@@ -559,7 +610,10 @@ Known gaps, tracked for future work:
   cross-compile needed there, unlike Windows) and attaches
   `AmpForge-<version>-macos.zip` the same way, so pushing a tag now
   publishes all three platforms with no manual packaging step on any of
-  them.
+  them. Only the Linux workflow runs on pull requests, though: the macOS
+  and Windows ones run on pushes to `main` and on tags, so a PR doesn't
+  wait on a macOS runner or on the mingw-w64/Wine cross-compile (either
+  can still be started by hand via `workflow_dispatch`).
 - The macOS build isn't code-signed or notarized (that needs a paid
   Apple Developer account this project doesn't have) - see
   [Download](#download) above for the Gatekeeper workaround this makes

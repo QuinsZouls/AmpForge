@@ -51,6 +51,7 @@
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <chrono>
 #include <sstream>
 
@@ -76,6 +77,12 @@ public:
     ChainPlugin()
         : Plugin(kParamCount, kProgramCount, 3 + kPluginSlotCount * 5 + 1)
     {
+        // Allocated once, here, at the largest block anything will ask for -
+        // and never resized (see preChainBuffer's own comment). Doing it in the
+        // constructor is what lets updateMaxBlockSizes() be callable from a host
+        // callback that runs while audio is rolling without ever handing the
+        // audio thread a buffer whose memory moves.
+        preChainBuffer.resize(kMaxPreChainFrames);
         gateBlock.setThresholdDB(-50.0f);
         gateBlock.setAttackMs(5.0f);
         gateBlock.setReleaseMs(150.0f);
@@ -104,6 +111,33 @@ public:
         namBlock.setInputTrim(0.0f);
         namBlock.setOutputTrim(0.0f);
         namBlock.setMix(1.0f);
+
+        // NAM's own guitar-amp tone stack (core/ToneStack.hpp) plus the A2
+        // slimmable size: all four tone knobs neutral (0dB) and Quality at
+        // 1.0 (full size) is exactly the state this block had before those
+        // controls existed, so nothing changes for a preset/session saved
+        // before them - see the kParamNamBass..kParamNamQuality comment in
+        // ChainParameters.hpp.
+        namBlock.setBassDB(0.0f);
+        namBlock.setMidDB(0.0f);
+        namBlock.setTrebleDB(0.0f);
+        namBlock.setPresenceDB(0.0f);
+        namBlock.setQuality(1.0f);
+
+        // Block-processing scratch for run(): the chain's block buffers,
+        // NAM's per-block buffers and our own trimmed-input buffer all get
+        // sized from the same number. Re-applied on
+        // activate()/bufferSizeChanged() below, since a host is free to
+        // change its buffer size - or re-activate - after construction.
+        //
+        // getBufferSize() is 0 while a host hasn't announced anything yet
+        // (and for DPF's dummy/meta-data instances), hence the 512 fallback:
+        // it covers every buffer size a plugin host realistically hands a
+        // chain, and EffectChain/NamBlock each allocate a correct 512-frame
+        // default themselves anyway - so this call is only about matching
+        // what the host actually said, and a host that never says anything
+        // still gets correct (and, at <= 512 frames, fast) processing.
+        updateMaxBlockSizes(getBufferSize() != 0 ? getBufferSize() : 512);
 
         ampBlock.setDriveDB(0.0f);
         ampBlock.setBassDB(0.0f);
@@ -266,6 +300,25 @@ public:
         for (int s = 0; s < kPluginSlotCount; ++s)
             pluginNodes[s].setSampleRate(initialSampleRate);
         tunerDetector.setSampleRate(initialSampleRate);
+    }
+
+    // Re-syncs everything that has to know the host's maximum block size
+    // (see updateMaxBlockSizes() below - it is the only place NAM's internal
+    // buffers get resized, and it is deliberately off the audio thread for
+    // exactly that reason). Called both from activate() and from
+    // bufferSizeChanged(), because hosts differ in which of the two they use:
+    // some announce a new buffer size only while the plugin is deactivated
+    // (DPF's contract for bufferSizeChanged()), others just re-activate it.
+    // Also covers the case where the host activates *after* setting a buffer
+    // size, i.e. without ever calling bufferSizeChanged() at all.
+    void activate() override
+    {
+        updateMaxBlockSizes(getBufferSize() != 0 ? getBufferSize() : 512);
+    }
+
+    void bufferSizeChanged(uint32_t newBufferSize) override
+    {
+        updateMaxBlockSizes(newBufferSize);
     }
 
     ampforge::HostedPlugin* getHostedPlugin(int slot) override
@@ -937,12 +990,22 @@ protected:
             // its own unique slot again.)
             parameter.ranges.def = 7.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 15.0f;
             break;
+        // Display names only: these two are the amp's gain and master volume
+        // (input trim into the capture, output level out of it), which is what
+        // makes the NAM node read like an amp instead of a capture loader.
+        // The *symbols* stay nam_input_trim/nam_output_level on purpose, as do
+        // their indices and ranges: some hosts key saved automation and
+        // session/project data by symbol, so renaming one would silently
+        // orphan everything already saved for it - a label is free to change,
+        // an identifier is not. (Same reason the five parameters appended
+        // after kParamSampleRate in ChainParameters.hpp went to the end of the
+        // enum rather than here.)
         case kParamNamInputTrim:
-            parameter.name = "NAM Input Trim"; parameter.symbol = "nam_input_trim"; parameter.unit = "dB";
+            parameter.name = "NAM Gain"; parameter.symbol = "nam_input_trim"; parameter.unit = "dB";
             parameter.ranges.def = 0.0f; parameter.ranges.min = -24.0f; parameter.ranges.max = 24.0f;
             break;
         case kParamNamOutputLevel:
-            parameter.name = "NAM Output Level"; parameter.symbol = "nam_output_level"; parameter.unit = "dB";
+            parameter.name = "NAM Master"; parameter.symbol = "nam_output_level"; parameter.unit = "dB";
             parameter.ranges.def = 0.0f; parameter.ranges.min = -24.0f; parameter.ranges.max = 12.0f;
             break;
         case kParamNamMix:
@@ -953,6 +1016,41 @@ protected:
             parameter.hints |= kParameterIsBoolean;
             parameter.name = "NAM Bypass"; parameter.symbol = "nam_bypass";
             parameter.ranges.def = 0.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 1.0f;
+            break;
+
+        // --- NAM tone stack + A2 quality (see the kParamNamBass ..
+        // kParamNamQuality comment in ChainParameters.hpp for why these live
+        // at the end of the enum, far from the rest of the NAM block above) ---
+        case kParamNamBass:
+            parameter.name = "NAM Bass"; parameter.symbol = "nam_bass"; parameter.unit = "dB";
+            parameter.ranges.def = 0.0f; parameter.ranges.min = -12.0f; parameter.ranges.max = 12.0f;
+            break;
+        case kParamNamMid:
+            parameter.name = "NAM Mid"; parameter.symbol = "nam_mid"; parameter.unit = "dB";
+            parameter.ranges.def = 0.0f; parameter.ranges.min = -12.0f; parameter.ranges.max = 12.0f;
+            break;
+        case kParamNamTreble:
+            parameter.name = "NAM Treble"; parameter.symbol = "nam_treble"; parameter.unit = "dB";
+            parameter.ranges.def = 0.0f; parameter.ranges.min = -12.0f; parameter.ranges.max = 12.0f;
+            break;
+        case kParamNamPresence:
+            // Boost-only (0 = off, the neutral state), exactly like
+            // kParamAmpPresence above - a real amp's presence control is a
+            // high-shelf lift on top of Treble, not a cut, and keeping the
+            // same range/default here is what makes NAM's presence knob read
+            // the same as the Amp block's.
+            parameter.name = "NAM Presence"; parameter.symbol = "nam_presence"; parameter.unit = "dB";
+            parameter.ranges.def = 0.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 12.0f;
+            break;
+        case kParamNamQuality:
+            // A2 slimmable model size: 1.0 = full size, which is the only
+            // behaviour that existed before this parameter (so it is also the
+            // default, keeping older presets/sessions identical); 0.0 = the
+            // smallest/cheapest submodel. No unit - it's a CPU/accuracy
+            // trade-off, not a physical quantity. A no-op for every non-A2
+            // capture (see NamBlock::hasSlimmableModel()).
+            parameter.name = "NAM Quality"; parameter.symbol = "nam_quality";
+            parameter.ranges.def = 1.0f; parameter.ranges.min = 0.0f; parameter.ranges.max = 1.0f;
             break;
         }
 
@@ -1169,6 +1267,12 @@ protected:
         case kParamNamOutputLevel:  return namOutputLevel;
         case kParamNamMix:          return namMix;
         case kParamNamBypass:       return namBypass ? 1.0f : 0.0f;
+
+        case kParamNamBass:         return namBass;
+        case kParamNamMid:          return namMid;
+        case kParamNamTreble:       return namTreble;
+        case kParamNamPresence:     return namPresence;
+        case kParamNamQuality:      return namQuality;
 
         default:
             if (index >= kParamPlugin1On && index <= kParamPlugin8Macro8)
@@ -1485,6 +1589,20 @@ protected:
             namMix = value; namBlock.setMix(value); break;
         case kParamNamBypass:
             namBypass = value > 0.5f; chain.setEnabled(&namBlock, namOn && !namBypass); break;
+        case kParamNamBass:
+            namBass = value; namBlock.setBassDB(value); break;
+        case kParamNamMid:
+            namMid = value; namBlock.setMidDB(value); break;
+        case kParamNamTreble:
+            namTreble = value; namBlock.setTrebleDB(value); break;
+        case kParamNamPresence:
+            namPresence = value; namBlock.setPresenceDB(value); break;
+        case kParamNamQuality:
+            // Only stored as the value the user asked for - NamBlock applies it
+            // at the next block boundary on the audio thread, never here (see
+            // NamBlock::setQuality()'s comment: this setter runs on the host's
+            // thread, and a submodel switch may not happen mid-block).
+            namQuality = value; namBlock.setQuality(value); break;
         }
 
         if (index >= kParamPlugin1On && index <= kParamPlugin8Macro8)
@@ -1981,9 +2099,51 @@ protected:
         const float* in  = inputs[0];
         float*       out = outputs[0];
 
+        // Whether this call may hand the chain a whole block. That needs
+        // somewhere to put the Input-Gain-trimmed input - unless Input Gain is
+        // at 0dB (a linear gain of exactly 1.0), in which case the chain reads
+        // the host's own buffer and needs no scratch at all. Correctness must
+        // never depend on the host announcing its buffer size: one that
+        // changed it without telling us, or that never called
+        // activate()/bufferSizeChanged() at all, can hand us more frames than
+        // preChainBuffer holds (kMaxPreChainFrames, fixed at construction), and
+        // the per-sample path below is what keeps that case correct instead of
+        // writing past the end of the vector. Same audible result either way,
+        // just without the speedup. (frames == 0 is harmless in both paths,
+        // and EffectChain/NamBlock each degrade on their own if frames is
+        // larger than the size *they* were given, so the only buffer this
+        // check has to protect is ours.)
+        const bool useBlockPath = inputGainLinear == 1.0f || preChainBuffer.size() >= frames;
+
+        // Input Gain is a single scalar, so folding it into the buffer once up
+        // front costs one multiply per sample - the same multiply the
+        // per-sample loop used to do - and leaves the chain a plain untrimmed
+        // block to process.
+        const float* chainInput = in;
+        if (inputGainLinear != 1.0f && useBlockPath)
+        {
+            for (uint32_t i = 0; i < frames; ++i)
+                preChainBuffer[i] = in[i] * inputGainLinear;
+            chainInput = preChainBuffer.data();
+        }
+
+        // The input meter and the tuner tap stay per-sample on purpose. They
+        // are two cheap operations with no per-call setup, so block
+        // processing would buy nothing - and the Input Level meter's exact
+        // per-sample fast-attack/slow-decay behaviour (see kInputMeterDecayMs)
+        // is something users watch while dialing Input Gain, so keeping the
+        // same loop over the same values keeps that reading bit-identical.
+        // The chain, by contrast, is where the time goes: NAM's neural
+        // network is dramatically cheaper per block than per sample (~1.6 vs
+        // ~9.3 us/sample measured on a real A2 capture), and it can only use
+        // that if it gets a whole buffer - so it does, right below.
         for (uint32_t i = 0; i < frames; ++i)
         {
-            const float trimmed = in[i] * inputGainLinear;
+            // On the block path the trim already happened above; on the
+            // fallback path it stays here, one sample at a time, exactly as
+            // this loop always did it - so the meter and the tuner see the
+            // same trimmed signal either way.
+            const float trimmed = useBlockPath ? chainInput[i] : in[i] * inputGainLinear;
 
             // Peak with slow decay (see kInputMeterDecayMs) rather than an
             // instant follow, so the Input Level meter reads like a real
@@ -2004,10 +2164,19 @@ protected:
             if (tunerOn)
                 tunerDetector.pushSample(trimmed);
 
-            out[i] = trimmed;
+            // The fallback path's chain work: the old fully per-sample loop,
+            // kept here (rather than in a second copy of the tap code above)
+            // so the two paths can't drift apart.
+            if (!useBlockPath)
+                out[i] = chain.processSample(trimmed);
         }
 
-        chain.processBlock(out, frames);
+        // The block path: one call for the whole buffer, which is what lets
+        // NamBlock hand NAM whole blocks instead of single frames. Same
+        // blocks, same order, same result as processSample() - see
+        // EffectChain::processBlock().
+        if (useBlockPath)
+            chain.processBlock(chainInput, out, frames);
 
         if (tunerOn)
             tunerFrequency = tunerDetector.getFrequencyHz();
@@ -2037,6 +2206,44 @@ private:
     void updateInputLevelDecay(double sampleRate)
     {
         inputLevelDecay = std::exp(-1.0f / (0.001f * kInputMeterDecayMs * static_cast<float>(sampleRate)));
+    }
+
+    // Sizes every buffer that depends on how many frames run() may be handed
+    // in one call: EffectChain's block scratch, NAM's own per-block buffers,
+    // and our trimmed-input buffer (see run()).
+    //
+    // This is the ONLY place NAM's internal buffers get resized, and it is
+    // called exclusively from non-realtime contexts - the constructor,
+    // activate() and bufferSizeChanged() - which is exactly why
+    // NamBlock::setMaxBlockSize() is allowed to allocate: it grows two
+    // std::vectors and Re-Reset()s the loaded model, and Reset() in turn sizes
+    // (i.e. allocates) every Eigen matrix and ring buffer NAM owns. None of
+    // that may ever happen inside run().
+    //
+    // All three sizes only ever grow (see EffectChain::setMaxBlockFrames() and
+    // NamBlock::setMaxBlockSize()), so a host that repeatedly announces a
+    // smaller buffer size costs nothing after the first large one, and nothing
+    // can shrink out from under a block that is still using it. A host that
+    // never calls either hook is still fine: EffectChain and NamBlock each
+    // allocate a correct 512-frame default themselves, and run() checks
+    // preChainBuffer's size before using it, so a bigger buffer is handled
+    // correctly (just without the block path) rather than overrunning
+    // anything.
+    void updateMaxBlockSizes(uint32_t frames)
+    {
+        // 0 means "the host hasn't told us anything yet" (DPF reports that for
+        // dummy/meta-data instances, and getBufferSize() can be 0 before the
+        // host announces one) - not a real buffer size to size for.
+        if (frames == 0)
+            return;
+
+        // Nothing here allocates: preChainBuffer was sized in the constructor
+        // and the chain's scratch likewise, so all three calls do is raise a
+        // cap. That is what makes this safe to reach from a host callback that
+        // runs while audio is rolling (and why preChainBuffer must never be
+        // resized here - see its own comment).
+        chain.setMaxBlockFrames(frames);
+        namBlock.setMaxBlockSize(static_cast<int>(frames));
     }
 
     // Recomputes Delay/Tremolo/Chorus's actual time/rate from the host's
@@ -2097,6 +2304,16 @@ private:
     ampforge::HarmonizerBlock harmonizerBlock;
     ampforge::ExciterBlock exciterBlock;
     ampforge::EffectChain chain;
+
+    // Holds the Input-Gain-trimmed input for one run() call when run() takes
+    // the block path (see its comment). Allocated once in the constructor at
+    // kMaxPreChainFrames and *never* resized: run() reads .size()/.data() on the
+    // audio thread, and a vector that grew underneath it could free the memory
+    // it was writing into (a real hazard when the host announces a new block
+    // size while rolling). A buffer bigger than that many frames just takes the
+    // per-sample path, which is what the size check in run() already covers.
+    static constexpr uint32_t kMaxPreChainFrames = 8192;
+    std::vector<float> preChainBuffer;
 
     // Input - applied directly in run(), ahead of the chain, rather than
     // through an AudioBlock/EffectChain slot, since it's a fixed pre-stage
@@ -2193,6 +2410,12 @@ private:
     // exactly while touching these lines anyway, so this doesn't depend on
     // that host behavior.)
     float namPosition = 7.0f, namInputTrim = 0.0f, namOutputLevel = 0.0f, namMix = 1.0f;
+    // NAM's tone stack (same units as the Amp block's above) and the A2
+    // slimmable size - see the kParamNamBass..kParamNamQuality comment in
+    // ChainParameters.hpp. Neutral/1.0 defaults: 0dB on all four bands and
+    // full model size is exactly what this block did before those controls
+    // existed.
+    float namBass = 0.0f, namMid = 0.0f, namTreble = 0.0f, namPresence = 0.0f, namQuality = 1.0f;
     // The loaded .nam model's path, carried as DPF State rather than a
     // Parameter - see initState()/getState()/setState() above.
     std::string namModelPath;

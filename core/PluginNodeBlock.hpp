@@ -167,12 +167,23 @@ public:
 
     float processSample(float input) override {
         float s = input;
-        processBlock(&s, 1);
+        processBlock(&s, &s, 1);
         return s;
     }
 
-    void processBlock(float* buffer, uint32_t frames) override {
+    // `in` and `out` may alias (the chain calls this in place when it can), so
+    // every read below reads `in` and every write writes `out` - never one
+    // buffer for both. The dry-pass-through helper is what keeps the three
+    // early returns honest: with separate buffers, simply returning would leave
+    // whatever the host's output buffer already held in `out`, i.e. a block of
+    // stale audio instead of the dry signal.
+    void processBlock(const float* in, float* out, uint32_t frames) override {
         if (frames == 0) return;
+
+        auto passThroughFrom = [&](uint32_t from) {
+            if (out != in)
+                std::copy(in + from, in + frames, out + from);
+        };
 
         // Track in-flight audio processing
         audioInFlight.fetch_add(1, std::memory_order_acq_rel);
@@ -187,7 +198,8 @@ public:
 
         HostedPlugin* plugin = activePlugin.load(std::memory_order_acquire);
         if (!plugin || manualBypass || autoBypassed.load(std::memory_order_relaxed)) {
-            return; // pass-through
+            passThroughFrom(0); // pass-through
+            return;
         }
 
         // Drain up to 64 queued parameter updates per block
@@ -207,7 +219,7 @@ public:
 
             // Prepare chunk input with input trim
             for (uint32_t i = 0; i < chunkFrames; ++i) {
-                chunkIn[i] = buffer[offset + i] * inputGainLinear;
+                chunkIn[i] = in[offset + i] * inputGainLinear;
             }
 
             // Call hosted plugin
@@ -227,7 +239,10 @@ public:
                 ++consecutiveBadBlocks;
                 if (consecutiveBadBlocks >= 5) {
                     autoBypassed.store(true, std::memory_order_release);
-                    // Pass dry remainder through
+                    // Pass the rest dry, from this chunk's first frame on: the
+                    // frames of it already written below stay as they are only
+                    // if `out` already held dry audio, which it does not.
+                    passThroughFrom(offset);
                     return;
                 }
             } else if (consecutiveBadBlocks > 0) {
@@ -236,7 +251,7 @@ public:
 
             // Mix wet & dry with latency compensation
             for (uint32_t i = 0; i < chunkFrames; ++i) {
-                const float dryIn = buffer[offset + i];
+                const float dryIn = in[offset + i];
 
                 // Write to circular dry delay line
                 dryBuffer[dryWritePos] = dryIn;
@@ -254,7 +269,7 @@ public:
 
                 const float wet = chunkOut[i] * outputGainLinear;
                 const float mixed = (1.0f - mix) * delayedDry + mix * wet;
-                buffer[offset + i] = flushDenormal(mixed);
+                out[offset + i] = flushDenormal(mixed);
             }
 
             offset += chunkFrames;

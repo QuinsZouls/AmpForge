@@ -143,42 +143,375 @@ AMPFORGE_TEST(effect_chain_ignores_blocks_that_were_never_added)
     CHECK_NEAR(chain.processSample(1.0f), 2.0f, 1e-6f);
 }
 
-AMPFORGE_TEST(effect_chain_process_block_matches_process_sample_bit_for_bit)
+/*
+ * Block processing (EffectChain::processBlock()).
+ *
+ * The promise being tested is that the block path is the *same* chain, not
+ * a second, subtly different one: same blocks, same order, same skipping of
+ * disabled slots, same result. So most of these tests build the reference
+ * output by calling processSample() in a loop and then require the block
+ * path to match it bit-exactly - the comparison is `==` rather than
+ * CHECK_NEAR on purpose, because the whole point is that existing blocks
+ * (which only implement processSample()) go through AudioBlock's default
+ * processBlock() loop and must not drift by even one ULP.
+ *
+ * The blocks used here are stateless (gain / offset), which is what makes
+ * it legitimate to run both paths on the same chain object and compare:
+ * nothing carries over from one call to the next.
+ */
+
+namespace {
+
+// A ramp is enough to make every frame produce a different value, so an
+// off-by-one in the buffer offsets can't hide behind repeated samples.
+std::vector<float> makeRamp(std::size_t frames, float start, float step)
 {
-    MultiplyBlock doubleIt1(2.0f);
-    AddBlock addOne1(1.0f);
+    std::vector<float> buffer(frames);
+    for (std::size_t i = 0; i < frames; ++i)
+        buffer[i] = start + step * static_cast<float>(i);
+    return buffer;
+}
 
-    ampforge::EffectChain chain1;
-    chain1.addBlock(&doubleIt1, 0);
-    chain1.addBlock(&addOne1, 1);
-    chain1.rebuildOrder();
+// The reference: what the chain has always produced, one sample at a time.
+std::vector<float> runPerSample(ampforge::EffectChain& chain, const std::vector<float>& input)
+{
+    std::vector<float> output(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i)
+        output[i] = chain.processSample(input[i]);
+    return output;
+}
 
-    MultiplyBlock doubleIt2(2.0f);
-    AddBlock addOne2(1.0f);
+/*
+ * Wraps another block and records how the chain drove it, so a test can
+ * observe the two things the output samples alone cannot show:
+ *
+ *  - perSampleCalls / blockCallFrames: which path the chain picked. When
+ *    processBlock() has to fall back to the per-sample loop (frames bigger
+ *    than the scratch buffers), the inner block's processBlock() must
+ *    never be reached - and for a stateless gain block the output would
+ *    come out right either way, so this is the only way to see it.
+ *
+ *  - aliasedCalls: whether the chain handed the block the same buffer for
+ *    input and output. Not a nicety - in-place *is* allowed (see
+ *    AudioBlock::processBlock()'s contract: "in and out may be the same
+ *    buffer", because the host calls us in place), so the chain aliases them
+ *    on purpose when there is exactly one enabled block, and that has to keep
+ *    working. Recording it is how a test can tell *which* of the two shapes
+ *    the chain chose for a given case: the gain/offset blocks in this file are
+ *    stateless and derive each output sample from the same input sample, so
+ *    they can't tell two scratch buffers from one shared buffer, and a chain
+ *    that started aliasing when it must not (two enabled blocks, i.e. a
+ *    block reading an intermediate another block already wrote) would pass
+ *    every comparison against processSample() and still break.
+ */
+class ObservedBlock : public ampforge::AudioBlock
+{
+public:
+    explicit ObservedBlock(ampforge::AudioBlock& innerBlock)
+        : inner(innerBlock) {}
 
-    ampforge::EffectChain chain2;
-    chain2.addBlock(&doubleIt2, 0);
-    chain2.addBlock(&addOne2, 1);
-    chain2.rebuildOrder();
+    void setSampleRate(double sampleRate) override { inner.setSampleRate(sampleRate); }
 
-    constexpr uint32_t kFrames = 256;
-    float inBuf[kFrames];
-    float sampleOut[kFrames];
-    float blockOut[kFrames];
-
-    for (uint32_t i = 0; i < kFrames; ++i)
+    float processSample(float input) override
     {
-        inBuf[i] = std::sin(static_cast<float>(i) * 0.1f);
-        sampleOut[i] = chain1.processSample(inBuf[i]);
-        blockOut[i] = inBuf[i];
+        ++perSampleCalls;
+        return inner.processSample(input);
     }
 
-    chain2.processBlock(blockOut, kFrames);
+    const char* getName() const override { return inner.getName(); }
+    void reset() override { inner.reset(); }
 
-    for (uint32_t i = 0; i < kFrames; ++i)
+    void processBlock(const float* in, float* out, uint32_t frames) override
     {
-        CHECK(sampleOut[i] == blockOut[i]);
+        blockCallFrames.push_back(frames);
+        if (in == out)
+            ++aliasedCalls;
+        inner.processBlock(in, out, frames);
     }
+
+    void clearObservations()
+    {
+        perSampleCalls = 0;
+        aliasedCalls = 0;
+        blockCallFrames.clear();
+    }
+
+    ampforge::AudioBlock& inner;
+    int perSampleCalls = 0;
+    int aliasedCalls = 0;
+    std::vector<uint32_t> blockCallFrames;
+};
+
+// Three enabled slots of alternating kind: a gain, an offset, and a gain
+// again, so a mistake in how results are handed from one slot to the next
+// shows up (getting the ping-pong buffers backwards, or dropping the last
+// block's output, changes the numbers).
+void addThreeGainAndOffsetBlocks(ampforge::EffectChain& chain,
+                                 MultiplyBlock& doubleIt,
+                                 AddBlock& addOne,
+                                 MultiplyBlock& halveIt)
+{
+    chain.addBlock(&doubleIt, 0);
+    chain.addBlock(&addOne, 1);
+    chain.addBlock(&halveIt, 2);
+    chain.rebuildOrder();
+}
+
+} // namespace
+
+AMPFORGE_TEST(effect_chain_process_block_matches_per_sample)
+{
+    MultiplyBlock doubleIt(2.0f);
+    AddBlock addOne(1.0f);
+    MultiplyBlock halveIt(0.5f);
+
+    ampforge::EffectChain chain;
+    addThreeGainAndOffsetBlocks(chain, doubleIt, addOne, halveIt);
+
+    const std::vector<float> input = makeRamp(64, -1.0f, 0.03125f);
+    const std::vector<float> expected = runPerSample(chain, input);
+
+    // 64 frames, so the block path has to bounce through the scratch
+    // buffers twice and still land the final result in `out`.
+    chain.setMaxBlockFrames(64);
+    std::vector<float> output(input.size(), 0.0f);
+    chain.processBlock(input.data(), output.data(), static_cast<uint32_t>(input.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(output[i] == expected[i]);
+}
+
+AMPFORGE_TEST(effect_chain_process_block_skips_disabled_blocks)
+{
+    MultiplyBlock doubleIt(2.0f);
+    AddBlock addOne(1.0f);
+    MultiplyBlock halveIt(0.5f);
+
+    ampforge::EffectChain chain;
+    addThreeGainAndOffsetBlocks(chain, doubleIt, addOne, halveIt);
+    chain.setMaxBlockFrames(32);
+
+    const std::vector<float> input = makeRamp(32, 0.0f, 0.0625f);
+
+    chain.setEnabled(&addOne, false);
+    const std::vector<float> expected = runPerSample(chain, input); // x * 2 * 0.5 == x
+
+    std::vector<float> output(input.size(), 0.0f);
+    chain.processBlock(input.data(), output.data(), static_cast<uint32_t>(input.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(output[i] == expected[i]);
+}
+
+AMPFORGE_TEST(effect_chain_process_block_works_in_place)
+{
+    // Real hosts hand us the same pointer for in and out. The intermediates
+    // live in the chain's scratch buffers, so `out` (== `in` here) is only
+    // written once every read of the input has already happened - but only
+    // if processBlock() actually sequences it that way, which is the thing
+    // under test.
+    MultiplyBlock doubleIt(2.0f);
+    AddBlock addOne(1.0f);
+    MultiplyBlock halveIt(0.5f);
+
+    ampforge::EffectChain chain;
+    addThreeGainAndOffsetBlocks(chain, doubleIt, addOne, halveIt);
+    chain.setMaxBlockFrames(48);
+
+    const std::vector<float> input = makeRamp(48, -0.75f, 0.03125f);
+    const std::vector<float> expected = runPerSample(chain, input);
+
+    std::vector<float> buffer = input; // deliberately the same vector for in and out
+    chain.processBlock(buffer.data(), buffer.data(), static_cast<uint32_t>(buffer.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(buffer[i] == expected[i]);
+}
+
+AMPFORGE_TEST(effect_chain_process_block_falls_back_when_larger_than_max_block_frames)
+{
+    // The host sent more frames than setMaxBlockFrames() prepared for (or
+    // never called it). The chain must not allocate or run off the end of
+    // its scratch buffers - it processes the call per sample instead, which
+    // is correct (just slower) and needs no scratch at all.
+    //
+    // Checking the numbers alone would be too weak here: an implementation
+    // that ignores maxBlockFrames and processes the block anyway would
+    // still come up with the right samples, it would just corrupt memory
+    // doing it. So a recording block reports *which* path was taken - the
+    // per-sample loop means processBlock() on that block is never reached.
+    MultiplyBlock doubleIt(2.0f);
+    AddBlock addOne(1.0f);
+    MultiplyBlock halveIt(0.5f);
+    ObservedBlock observedHalve(halveIt);
+
+    ampforge::EffectChain chain;
+    chain.addBlock(&doubleIt, 0);
+    chain.addBlock(&addOne, 1);
+    chain.addBlock(&observedHalve, 2);
+    chain.rebuildOrder();
+    chain.setMaxBlockFrames(16);
+
+    const std::vector<float> input = makeRamp(256, -1.0f, 0.0078125f);
+    const std::vector<float> expected = runPerSample(chain, input);
+
+    // runPerSample() above already drove the observed block per sample, so
+    // start from a clean slate.
+    observedHalve.clearObservations();
+
+    std::vector<float> output(input.size(), 0.0f);
+    chain.processBlock(input.data(), output.data(), static_cast<uint32_t>(input.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(output[i] == expected[i]);
+
+    CHECK(observedHalve.blockCallFrames.empty()); // never got a block: fell back
+    CHECK(observedHalve.perSampleCalls == static_cast<int>(input.size()));
+
+    // Sized for the same block, the block path is taken instead - otherwise
+    // the assertions above would also hold for a chain that always fell
+    // back, i.e. one where block processing never works at all.
+    chain.setMaxBlockFrames(256);
+    observedHalve.clearObservations();
+    chain.processBlock(input.data(), output.data(), static_cast<uint32_t>(input.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(output[i] == expected[i]);
+    CHECK(observedHalve.blockCallFrames.size() == 1);
+    CHECK(observedHalve.blockCallFrames[0] == 256);
+    CHECK(observedHalve.perSampleCalls == 0);
+}
+
+AMPFORGE_TEST(effect_chain_process_block_never_aliases_a_blocks_input_and_output)
+{
+    // The middle block is the interesting one: the first block reads the
+    // host's buffer and the last one writes `out`, so only an intermediate
+    // step can end up being handed the buffer it just wrote itself.
+    MultiplyBlock doubleIt(2.0f);
+    AddBlock addOne(1.0f);
+    MultiplyBlock halveIt(0.5f);
+    ObservedBlock observedAdd(addOne);
+
+    ampforge::EffectChain chain;
+    chain.addBlock(&doubleIt, 0);
+    chain.addBlock(&observedAdd, 1);
+    chain.addBlock(&halveIt, 2);
+    chain.rebuildOrder();
+    chain.setMaxBlockFrames(64);
+
+    const std::vector<float> input = makeRamp(64, -1.0f, 0.03125f);
+    const std::vector<float> expected = runPerSample(chain, input);
+    observedAdd.clearObservations();
+
+    // Separate in and out buffers: no block in the chain may be handed the
+    // same buffer for both, because the intermediates are supposed to live
+    // in the chain's scratch buffers and be handed over as distinct
+    // buffers - a block doing whole-buffer work is not obliged to be
+    // in-place safe.
+    std::vector<float> output(input.size(), 0.0f);
+    chain.processBlock(input.data(), output.data(), static_cast<uint32_t>(input.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(output[i] == expected[i]);
+    CHECK(observedAdd.blockCallFrames.size() == 1);
+    CHECK(observedAdd.aliasedCalls == 0);
+
+    // An in-place call from the host (in == out) is a different matter: the
+    // chain may not read `in` after writing `out`, so with a single enabled
+    // block it can pass the host's already-aliased pair straight through -
+    // that is exactly what processBlock()'s contract allows ("in and out
+    // may be the same buffer"), and it is why the one-block case costs no
+    // copy at all.
+    ampforge::EffectChain single;
+    single.addBlock(&observedAdd, 0);
+    single.rebuildOrder();
+    single.setMaxBlockFrames(64);
+    observedAdd.clearObservations();
+
+    std::vector<float> inPlace = input;
+    single.processBlock(inPlace.data(), inPlace.data(), static_cast<uint32_t>(inPlace.size()));
+    CHECK(observedAdd.blockCallFrames.size() == 1); // one call, not a per-sample fallback
+    CHECK(observedAdd.aliasedCalls == 1);           // and no pointless scratch detour
+
+    // ... while a multi-block in-place call must not alias, because the
+    // intermediates in between still need the input.
+    std::vector<float> inPlaceChain = input;
+    observedAdd.clearObservations();
+    chain.processBlock(inPlaceChain.data(), inPlaceChain.data(),
+                       static_cast<uint32_t>(inPlaceChain.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(inPlaceChain[i] == expected[i]);
+    CHECK(observedAdd.aliasedCalls == 0);
+}
+
+AMPFORGE_TEST(effect_chain_process_block_with_zero_frames_touches_nothing)
+{
+    MultiplyBlock doubleIt(2.0f);
+    AddBlock addOne(1.0f);
+    ObservedBlock observedAdd(addOne);
+
+    ampforge::EffectChain chain;
+    chain.addBlock(&doubleIt, 0);
+    chain.addBlock(&observedAdd, 1);
+    chain.rebuildOrder();
+    chain.setMaxBlockFrames(64);
+
+    std::vector<float> input = makeRamp(8, 1.0f, 1.0f);
+    const std::vector<float> inputBefore = input;
+
+    // A sentinel in every slot: an empty block must leave it untouched
+    // rather than, say, falling through into the block path and running the
+    // chain over zero frames - which would still copy `in` and so would
+    // look harmless for this buffer, but only because the input happens to
+    // be a valid 8-frame ramp. Running the blocks at all on an empty buffer
+    // is what must not happen (their per-sample paths never run, so nothing
+    // is advanced, but the copy into `out` would still clobber it), so the
+    // sentinel plus the observed block's call count together pin it down.
+    observedAdd.clearObservations();
+
+    std::vector<float> output(8, -123.0f);
+    chain.processBlock(input.data(), output.data(), 0);
+
+    for (std::size_t i = 0; i < output.size(); ++i)
+        CHECK(output[i] == -123.0f);
+    CHECK(observedAdd.blockCallFrames.empty()); // no block was asked to run
+    CHECK(observedAdd.perSampleCalls == 0);
+
+    // And the input must be left alone too, obviously - checked so a
+    // future "write in place then copy" rewrite can't quietly break it.
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(input[i] == inputBefore[i]);
+}
+
+AMPFORGE_TEST(effect_chain_process_block_copies_input_when_no_blocks_are_enabled)
+{
+    MultiplyBlock doubleIt(2.0f);
+    AddBlock addOne(1.0f);
+
+    ampforge::EffectChain chain;
+    chain.addBlock(&doubleIt, 0);
+    chain.addBlock(&addOne, 1);
+    chain.rebuildOrder();
+    chain.setMaxBlockFrames(64);
+    chain.setEnabled(&doubleIt, false);
+    chain.setEnabled(&addOne, false);
+
+    const std::vector<float> input = makeRamp(64, -1.0f, 0.03125f);
+
+    std::vector<float> output(input.size(), 0.0f);
+    chain.processBlock(input.data(), output.data(), static_cast<uint32_t>(input.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(output[i] == input[i]);
+
+    // Same thing with in == out: the copy must not corrupt the signal
+    // (std::copy with overlapping, identical source and destination).
+    std::vector<float> inPlace = input;
+    chain.processBlock(inPlace.data(), inPlace.data(), static_cast<uint32_t>(inPlace.size()));
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK(inPlace[i] == input[i]);
 }
 
 AMPFORGE_TEST(effect_chain_stateful_dsp_process_block_matches_process_sample)
@@ -208,14 +541,20 @@ AMPFORGE_TEST(effect_chain_stateful_dsp_process_block_matches_process_sample)
     float sampleOut[kFrames];
     float blockOut[kFrames];
 
+    // Without this the chain has no scratch sized for 512 frames and would
+    // take its per-sample fallback - the audio would still match, and the test
+    // would be silently checking the wrong path.
+    chain2.setMaxBlockFrames(kFrames);
+
     for (uint32_t i = 0; i < kFrames; ++i)
     {
         inBuf[i] = 0.5f * std::sin(static_cast<float>(i) * 0.05f);
         sampleOut[i] = chain1.processSample(inBuf[i]);
-        blockOut[i] = inBuf[i];
     }
 
-    chain2.processBlock(blockOut, kFrames);
+    // Separate in/out buffers on purpose: the chain's own scratch path, not
+    // the in-place shortcut a single-block chain would take.
+    chain2.processBlock(inBuf, blockOut, kFrames);
 
     for (uint32_t i = 0; i < kFrames; ++i)
     {

@@ -18,6 +18,11 @@ name: Linux build
 # what caused it to fail to load there in the first place - having every
 # tagged release go through this one automated, always-portable path
 # instead removes that whole class of mistake.
+#
+# This is also the only workflow that runs on pull_request: the macOS and
+# Windows builds still run on every push to main and on tags (so releases
+# keep being built on both), but they no longer gate a PR - see the comment
+# in macos-build.yml / windows-build.yml for why.
 on:
   push:
     branches: [main]
@@ -53,8 +58,14 @@ jobs:
         run: cmake -S . -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build and run the DSP unit tests
+        # Both test targets, explicitly: `ctest` below runs every test that was
+        # registered, so building only one of them leaves the other "Not Run"
+        # (CTest reports that as a failure, not a skip). ampforge_nam_tests is
+        # the NAM half of the suite - it links NeuralAmpModelerCore (fetched by
+        # the root CMakeLists, so no extra setup here) and covers the .nam
+        # loading, A2/slimmable and block-batching paths.
         run: |
-          cmake --build build-tests --target ampforge_tests
+          cmake --build build-tests --target ampforge_tests ampforge_nam_tests
           ctest --test-dir build-tests --output-on-failure
 
   build:

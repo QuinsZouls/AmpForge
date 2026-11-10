@@ -123,7 +123,46 @@ target_include_directories(nam_core PUBLIC
   "${neuralampmodelercore_SOURCE_DIR}/Dependencies/eigen"
   "${neuralampmodelercore_SOURCE_DIR}/Dependencies/nlohmann")
 # AmpForge's DSP pipeline is float, not NAM's default double.
-target_compile_definitions(nam_core PUBLIC NAM_SAMPLE_FLOAT)
+#
+# NAM_ENABLE_A2_FAST turns on NeuralAmpModelerCore's specialized A2 WaveNet
+# fast path (NAM/wavenet/a2_fast.cpp) - a hand-written implementation for
+# exactly the two layer-array shapes every A2 capture ("SlimmableContainer"
+# .nam files, file format 0.7.x) contains: 8 channels ("A2 standard") and 3
+# channels ("A2 nano"). NAM's own CMakeLists declares it as `option(... ON)`,
+# but we don't use their CMake build at all (see the manual nam_core target
+# above), so without this define every A2 model silently falls back to the
+# generic WaveNet implementation - it still loads and sounds right, it just
+# costs more CPU than it has to.
+#
+# How much more, measured rather than assumed. One core, -O2, float samples,
+# 512-frame blocks, NamBlock driven through the chain's processBlock() path,
+# on a real A2 capture (FNDR BFSR VB Edge WRM2, 48 kHz, two submodels - a
+# 3-channel "A2 nano" one and an 8-channel "A2 standard" one), median of 3
+# runs:
+#
+#                       generic         A2 fast        of one core
+#     full size (8 ch)  1.51 us/sample   1.33 us/sample   7.2% -> 6.4%
+#     smallest (3 ch)   0.98 us/sample   0.53 us/sample   4.7% -> 2.5%
+#
+# So: ~1.15x on the full-size submodel and ~1.85x on the small one. Worth
+# having (it is free) but *not* the order-of-magnitude the name suggests, and
+# not a reason to prefer A2 files. The big win is block batching, not this -
+# see core/NamBlock.hpp, where running one sample at a time instead measures
+# 9.5-13 us/sample, i.e. 6-10x slower than the same capture processed in
+# blocks, either way.
+#
+# The two implementations agree to float rounding: a null test comparing their
+# outputs sample for sample gave a max |difference| of 4e-7, i.e. -130 dB
+# relative to the signal. That null test was a local one-off, not something CI
+# reproduces - the fixtures in tests/test_namblock.cpp are tiny hand-written
+# Linear/A2-container models, which exercise the loader and the size switch but
+# never the A2 *kernel*. Re-running it means loading the same capture twice,
+# once with this define and once without, and comparing output.
+#
+# Models that don't match the A2 shape are unaffected either way: is_a2_shape()
+# is a strict signature check on the layer arrays, and anything that fails it
+# keeps using the generic path.
+target_compile_definitions(nam_core PUBLIC NAM_SAMPLE_FLOAT NAM_ENABLE_A2_FAST)
 # NAM requires C++20 - scoped to this target (and whatever links it) only, so
 # plugins 01-03 stay on the compiler's default standard.
 target_compile_features(nam_core PUBLIC cxx_std_20)

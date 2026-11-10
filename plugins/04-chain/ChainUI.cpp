@@ -42,6 +42,7 @@
 #include <filesystem>
 #include <chrono>
 #include <map>
+#include <sstream>
 #include <cctype>
 #include <cstring>
 
@@ -71,6 +72,13 @@ static const Color kColorDropdownBg(30, 30, 37);
 static const Color kColorModalOverlay(0, 0, 0);
 static const Color kColorModalBox(32, 32, 40);
 static const Color kColorScrollbar(70, 70, 82);
+// "Worth noticing, nothing failed" amber - the CPU meter's mid band, the
+// tuner's out-of-tune needle, the audio-settings routing dot and its
+// "saved port not found" line all wanted it, and used to spell it out as a
+// literal Color(230, 175, 60) at each site. Named here so the Status
+// panel's capture-rate warning can reuse it instead of becoming a fifth
+// copy. Red (kColorRemove) stays reserved for real failures/clipping.
+static const Color kColorWarn(230, 175, 60);
 // A cool, neutral steel tone for the Input panel - distinct from every
 // pedal's own accent color, since Input is a utility trim stage rather
 // than a tone-shaping effect.
@@ -107,6 +115,13 @@ static constexpr float kModuleGap        = 24.0f;
 static constexpr float kCableJackRadius  = 3.5f;
 static constexpr float kKnobRadius       = 22.0f;
 static constexpr float kKnobSpacing      = 84.0f;
+// Floor a compressed pedal-card knob row may shrink to - see
+// knobRowLayout()'s comment for the whole rule set. 56px is the point where
+// the 44px-diameter knob faces (kKnobRadius * 2) and their labels (10.5px
+// type, up to 8 characters) still clear each other by a visible margin; below
+// it two adjacent knobs read as one smear, so an over-long row spills off the
+// card instead of compressing further.
+static constexpr float kKnobRowMinSpacing = 56.0f;
 static constexpr float kKnobCenterYOffset = 50.0f; // header bottom -> knob center
 static constexpr float kValueChipW       = 70.0f;
 static constexpr float kValueChipH       = 18.0f;
@@ -182,8 +197,16 @@ static constexpr float kSidebarGap       = 20.0f;
 static constexpr float kInputPanelH      = kModuleHeaderH + kKnobAreaH;
 static constexpr float kStatusPanelTop   = kRackTop + kInputPanelH + kModuleGap;
 // Shorter than before (320) now that the Input Level meter isn't
-// duplicated here too - see drawStatusSidebar()'s comment.
-static constexpr float kSidebarHeight    = 230.0f;
+// duplicated here too - see drawStatusSidebar()'s comment. Grew back by 18
+// (to 248) when the NAM MODEL section gained a second caption line (the A2
+// "sizes" count) and an optional capture-sample-rate line: the last row used
+// to end at y+195 of 230, and the rate row lands at y+211, so this keeps the
+// same ~35px of empty panel below the last line rather than leaving 16.
+// Still comfortable at the default 1100x720: kStatusPanelTop is 290, so the
+// panel now ends at 538 while the bottom bar starts at 676. Only this one
+// use of the constant exists (grep) - the Input panel above it is positioned
+// by kInputPanelH, not by this.
+static constexpr float kSidebarHeight    = 248.0f;
 
 struct KnobDef
 {
@@ -374,9 +397,28 @@ static PedalDef kPedalDefs[] =
         { "Level",   kParamCabinetLevel, -24.0f, 12.0f, "dB", 1, false },
     }, true, kCabinetIRStateKey, StompShape::Wide, StompIcon::Cabinet, "Load IR File..." },
     { "NAM",        kParamNamOn,     kParamNamBypass,     kParamNamPosition, 7, Color(230, 120, 200), {
-        { "In",      kParamNamInputTrim,    -24.0f, 24.0f, "dB", 1, false },
-        { "Mix",     kParamNamMix,             0.0f, 1.0f,  "",   0, true },
-        { "Out",     kParamNamOutputLevel,  -24.0f, 12.0f, "dB", 1, false },
+        // Amp-panel order: the input gain a real amp calls "Gain" first, the
+        // tone stack next, then Master near the end of the amp controls, and
+        // finally the two knobs that aren't amp controls at all - Mix (how
+        // much of the capture vs. the dry signal) and Size (the A2
+        // "slimmable" model size, kParamNamQuality: 1.0 = full size, and a
+        // no-op for anything that isn't an A2 "SlimmableContainer" capture -
+        // see knobIsInert()/namModelIsSlimmable() for how the UI greys it out
+        // when it does nothing).
+        // Same eight knobs mean, in parameter terms: "Gain" is the OLD
+        // kParamNamInputTrim and "Master" the OLD kParamNamOutputLevel, which
+        // kept their own parameter indices/symbols (nam_input_trim,
+        // nam_output_level) and only changed their *display* names - see
+        // ChainParameters.hpp's comment. Bass/Mid/Treble/Presence/Quality are
+        // the five brand-new parameters.
+        { "Gain",     kParamNamInputTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Bass",     kParamNamBass,       -12.0f, 12.0f, "dB", 1, false },
+        { "Mid",      kParamNamMid,        -12.0f, 12.0f, "dB", 1, false },
+        { "Treble",   kParamNamTreble,     -12.0f, 12.0f, "dB", 1, false },
+        { "Presence", kParamNamPresence,     0.0f, 12.0f, "dB", 1, false },
+        { "Master",   kParamNamOutputLevel, -24.0f, 12.0f, "dB", 1, false },
+        { "Mix",      kParamNamMix,          0.0f,  1.0f, "",   0, true },
+        { "Size",     kParamNamQuality,      0.0f,  1.0f, "",   0, true },
     }, true, kNamModelStateKey, StompShape::HexCut, StompIcon::Neural, "Load NAM Model..." },
     // Appended at the end like Distortion/Cabinet/NAM above, same
     // reasoning (existing entries' indices stay stable). The only pedal
@@ -667,6 +709,20 @@ static const float kBlankPresetValues[kParamCount] =
     /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
     /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
     /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+    // NAM's five tone/quality parameters are positional like everything else
+    // above, and unlike the rest of this array their neutral value is NOT
+    // zero: 0.0f on Quality means "the smallest, cheapest A2 submodel", not
+    // "the old behaviour", and the four tone knobs are dB with 0dB = neutral.
+    // See ChainPresets.hpp's note on the exact same trap (and
+    // ChainParameters.hpp's comment on kParamNamQuality) - every factory
+    // preset there spells these out too.
+    /* NAM bass,mid,treble,presence,quality */ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+    /* Output-only meters - Input Level, CPU Load, Tuner Frequency, Buffer
+       Size, Sample Rate. Spelled out rather than omitted: they sit between the
+       NAM block and the plugin slots in the Parameters enum, and an aggregate
+       initialiser can only omit values at the END - leaving these out would
+       shift every plugin value below five slots off target, still compiling. */
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
     /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
@@ -681,7 +737,12 @@ static const float kBlankPresetValues[kParamCount] =
 struct CustomPreset
 {
     std::string name;
-    float values[kParamCount];
+    // Value-initialised, not left indeterminate: parsePresetsFromStream()
+    // deliberately does not write the output-only slots, and a preset that
+    // skipped one would otherwise be copied (and later re-written to
+    // user_presets.txt) with uninitialised floats in it - reading those is UB
+    // even though nothing audible uses them.
+    float values[kParamCount]{};
     std::map<std::string, std::string> states;
 };
 
@@ -1539,13 +1600,27 @@ protected:
                 else
                 {
                     const float knobCenterY = y + kModuleHeaderH + kKnobCenterYOffset;
-                    float knobX = kModuleLeft + 50.0f;
+                    // Same geometry the paint loop in drawModuleCard() uses -
+                    // see knobRowLayout(), which is the whole point of it
+                    // existing.
+                    const KnobRowLayout row = knobRowLayout(moduleW, def.knobs.size(), def.hasFileLoader);
                     for (size_t k = 0; k < def.knobs.size(); ++k)
                     {
+                        const float knobX = row.firstX + static_cast<float>(k) * row.spacing;
+
+                        // An inert knob (the NAM card's "Size" on a non-A2
+                        // capture, see knobIsInert()) accepts nothing at all -
+                        // no drag, no double-click value edit, no chip click.
+                        // The press falls through to the card's own
+                        // drag-to-reorder below, which is what any other
+                        // non-interactive part of the card does.
+                        if (knobIsInert(def.knobs[k]))
+                            continue;
+
                         // The value readout chip - click it to type an exact value.
-                        const float chipX = knobX - kValueChipW * 0.5f;
+                        const float chipX = knobX - row.chipW * 0.5f;
                         const float chipY = knobCenterY + kKnobRadius + kValueChipGap;
-                        if (mx >= chipX && mx <= chipX + kValueChipW && my >= chipY && my <= chipY + kValueChipH)
+                        if (mx >= chipX && mx <= chipX + row.chipW && my >= chipY && my <= chipY + kValueChipH)
                         {
                             startKnobEdit(pedalIndex, static_cast<int>(k));
                             return true;
@@ -1567,13 +1642,13 @@ protected:
                             editParameter(def.knobs[k].paramIndex, true);
                             return true;
                         }
-                        knobX += kKnobSpacing;
                     }
 
                     if (def.hasFileLoader)
                     {
+                        const float btnX = row.firstX + static_cast<float>(def.knobs.size()) * row.spacing;
                         const float btnY = knobCenterY - kFileLoaderH * 0.5f;
-                        if (mx >= knobX && mx <= knobX + kFileLoaderW && my >= btnY && my <= btnY + kFileLoaderH)
+                        if (mx >= btnX && mx <= btnX + kFileLoaderW && my >= btnY && my <= btnY + kFileLoaderH)
                         {
                             requestStateFile(def.stateKey);
                             return true;
@@ -1873,9 +1948,9 @@ protected:
         if (std::strcmp(key, kPresetImportStateKey) == 0 && value[0] != '\0')
             importPresetsFromFile(value);
 
-        // Derive the NAM sidebar's architecture caption (and, on failure,
-        // its toast) straight from the .nam file itself rather than from
-        // anything ChainPlugin pushes back - see readNamArchitecture()'s
+        // Derive the NAM sidebar's model caption, sample rate and (on
+        // failure) its toast straight from the .nam file itself rather than
+        // from anything ChainPlugin pushes back - see readNamFileInfo()'s
         // comment and kNamModelStateKey's comment in ChainParameters.hpp
         // for why: the DSP-side push this used to rely on
         // (Plugin::updateStateValue()) is a no-op on VST3 and CLAP in this
@@ -1886,8 +1961,8 @@ protected:
         // redundant re-delivery of a value we've already processed.
         if (std::strcmp(key, kNamModelStateKey) == 0 && value[0] != '\0' && changed)
         {
-            namArchitecture = readNamArchitecture(value);
-            if (namArchitecture.empty())
+            namFile = readNamFileInfo(value);
+            if (namFile.architecture.empty())
                 triggerSaveToast("NAM model failed to load: " + std::filesystem::path(value).filename().string()
                     + " (unreadable, or not a valid .nam file)");
         }
@@ -1978,6 +2053,33 @@ protected:
     }
 
 private:
+    // Everything the Status panel reports about a .nam capture, as read out
+    // of a bounded prefix of the file by readNamFileInfo() below.
+    struct NamFileInfo
+    {
+        // The top-level "architecture": "WaveNet", "LSTM", "ConvNet",
+        // "Linear" for A1 captures, "SlimmableContainer" for A2 ones - the
+        // same field NamBlock::getArchitecture() reports on the DSP side.
+        // Empty is this type's only failure signal, and it means "didn't
+        // look like a readable .nam file" - see readNamFileInfo().
+        std::string architecture;
+        // The sample rate the capture was trained at, straight out of the
+        // file - what AmpForge feeds the block is the *host's* rate (see
+        // kParamSampleRate), and .nam models aren't resampled on load, so
+        // the two disagreeing is worth showing. -1.0 = the file doesn't
+        // declare one, which is common and entirely valid: A1 captures
+        // often have no "sample_rate" field at all. Callers must treat that
+        // as "unknown", never as a load failure.
+        double sampleRate = -1.0;
+        // How many submodels the capture offers - an A2 "SlimmableContainer"
+        // lists one "max_value" per submodel (that's the range kParamNamQuality
+        // indexes into), an A1 file has none. Counted as plain occurrences
+        // in the prefix, so it's a hint rather than a fact - 0 also means
+        // "the submodels didn't fit in the prefix", which is why nothing
+        // behavioural may depend on it (see namModelIsSlimmable()).
+        int submodelCount = 0;
+    };
+
     void reloadBuiltinPlugins()
     {
         builtinConfigs = ampforge::PluginConfig::loadBuiltinPlugins();
@@ -2202,43 +2304,217 @@ private:
         }
         repaint();
     }
-    // Reads just enough of the front of a .nam file to pull out its
-    // top-level "architecture" field ("WaveNet", "LSTM", "SlimmableContainer"
-    // for A2 captures, ...) - the same field NamBlock::getArchitecture()
-    // reports on the DSP side. Deliberately not a real JSON parser: NAM/
+
+    // Reads just enough of the front of a .nam file to fill in NamFileInfo -
+    // the architecture, the rate the capture was trained at, and how many
+    // submodels it lists. Deliberately not a real JSON parser: NAM/
     // nlohmann::json are DSP-only dependencies (see CMakeLists.txt's
     // comment on FILES_DSP vs FILES_UI), and a full parse isn't worth
-    // pulling those into the UI just to read one string for display. Real
-    // .nam files put "architecture" within roughly the first couple KB,
-    // before metadata and the (potentially many-MB) weight arrays, so a
-    // small bounded prefix read plus a plain substring scan is enough.
-    // Returns empty on any read failure or if the field isn't found in
-    // that prefix - ChainUI::stateChanged() treats that as "this doesn't
-    // look like a valid .nam file" and shows a failure toast instead of
-    // marking the model as loaded.
-    static std::string readNamArchitecture(const std::string& path)
+    // pulling those into the UI just to read a few fields for display. A
+    // bounded prefix read plus plain substring scans is enough, provided the
+    // prefix actually reaches everything wanted.
+    //
+    // 64 KB, up from the 8192 this used while all it wanted was the
+    // architecture. "architecture" really does sit in the first few hundred
+    // bytes (measured: 19 bytes on three TONE3000 A2 captures, 531 on a
+    // fourth whose big metadata block comes first), but "sample_rate" does
+    // not: in an A2 container each submodel's layer weights are inline in
+    // its config, so the rate lands after those - measured at ~41 KB on
+    // those same four captures. (An A1 WaveNet config holds layer *specs*,
+    // no weights, so its top-level rate sits much closer to the front;
+    // 64 KB covers that case for free.) An 8 KB prefix therefore always
+    // found the architecture and never the rate, which is the whole reason
+    // this grew. 64 KB clears ~41 KB with room to spare and is still one
+    // small bounded read, so the "never read the whole file" property
+    // survives.
+    //
+    // One honest caveat about *which* "sample_rate" the scan lands on: it
+    // finds the first one, and in an A2 container each submodel carries its
+    // own "sample_rate" inside its nested model object - ahead of the
+    // container's own top-level field, which in these files sits right at
+    // the end of the file, after the weights, where no bounded prefix could
+    // ever reach it. The submodel and container rates agreed in every
+    // capture checked (all four: 48000 in both places), which is what makes
+    // the first occurrence an acceptable answer; submodels of one container
+    // disagreeing about their rate wouldn't be a coherent capture to begin
+    // with.
+    //
+    // Returns a default-constructed NamFileInfo (empty architecture) on any
+    // read failure or if "architecture" isn't in that prefix -
+    // ChainUI::stateChanged() treats that as "this doesn't look like a valid
+    // .nam file" and shows a failure toast instead of marking the model as
+    // loaded. A missing or unparsable "sample_rate" is *not* a failure, just
+    // an unknown rate.
+    static NamFileInfo readNamFileInfo(const std::string& path)
     {
+        NamFileInfo info;
+
         std::ifstream f(path, std::ios::binary);
         if (!f)
-            return {};
+            return info;
 
-        std::string buf(8192, '\0');
+        std::string buf(65536, '\0');
         f.read(&buf[0], static_cast<std::streamsize>(buf.size()));
         buf.resize(static_cast<size_t>(f.gcount()));
 
-        const size_t keyPos = buf.find("\"architecture\"");
+        // At the *top level*, not "the first \"architecture\" anywhere in the
+        // prefix". An A2 SlimmableContainer embeds a complete model object per
+        // submodel, and each of those carries its own
+        // "architecture":"WaveNet" - so a file that happens to serialise its
+        // config before its top-level architecture would make this read
+        // "WaveNet", grey out a Size knob that works and show the wrong
+        // architecture in the sidebar, while the DSP (which asks the file's
+        // parser, not a heuristic) loaded the container correctly. Falls back
+        // to the old first-match scan for anything that isn't shaped the way
+        // this code expects, so an unusual-but-valid file still gets an answer
+        // rather than an empty one.
+        info.architecture = jsonStringAt(buf, jsonValuePosAtDepth(buf, "architecture", 1));
+        if (info.architecture.empty())
+            info.architecture = jsonStringField(buf, "architecture");
+        // Bail out before the other two lookups rather than reporting a rate
+        // for something that isn't a .nam file at all - a half-filled struct
+        // would invite exactly the sort of "it's mostly valid" reasoning
+        // this contract exists to prevent.
+        if (info.architecture.empty())
+            return info;
+
+        info.sampleRate = jsonNumberField(buf, "sample_rate");
+        info.submodelCount = countOccurrences(buf, "\"max_value\"");
+        return info;
+    }
+
+    // Offset just past the ':' that follows the quoted `key` in `buf`, or
+    // npos when the key isn't in the prefix. Small, but it is the one piece
+    // the string and number readers below genuinely share - and the place
+    // where "the key must be followed by a value" is enforced.
+    static size_t jsonValuePos(const std::string& buf, const char* key)
+    {
+        const std::string quoted = std::string("\"") + key + "\"";
+        const size_t keyPos = buf.find(quoted);
         if (keyPos == std::string::npos)
+            return std::string::npos;
+        const size_t colon = buf.find(':', keyPos + quoted.size());
+        return (colon == std::string::npos) ? std::string::npos : colon + 1;
+    }
+
+    // Same as jsonValuePos(), but only matches `key` when the scanner is at
+    // JSON nesting depth `wanted` (1 = inside the file's top-level object), and
+    // with braces inside strings ignored - a "{" in a model *name* must not
+    // count as nesting. Needed because a .nam file can contain more than one
+    // "architecture": an A2 container has a top-level one naming itself, plus
+    // one per embedded submodel. Deliberately forgiving: it tracks only the two
+    // bracket kinds, and any unbalanced prefix simply yields npos, which the
+    // caller treats as "fall back".
+    static size_t jsonValuePosAtDepth(const std::string& buf, const char* key, int wanted)
+    {
+        const std::string quoted = std::string("\"") + key + "\"";
+        int depth = 0;
+        bool inString = false, escaped = false;
+        for (size_t i = 0; i < buf.size(); ++i)
+        {
+            const char c = buf[i];
+            if (inString)
+            {
+                if (escaped)          escaped = false;
+                else if (c == '\\')  escaped = true;
+                else if (c == '"')    inString = false;
+                continue;
+            }
+            if (c == '"')
+            {
+                if (depth == wanted && buf.compare(i, quoted.size(), quoted) == 0)
+                {
+                    const size_t colon = buf.find(':', i + quoted.size());
+                    return (colon == std::string::npos) ? std::string::npos : colon + 1;
+                }
+                inString = true;
+            }
+            else if (c == '{' || c == '[') ++depth;
+            else if (c == '}' || c == ']') --depth;
+        }
+        return std::string::npos;
+    }
+
+    // The bare string value of `key` ("WaveNet", ...), or empty when the key
+    // is absent or its value isn't a string.
+    static std::string jsonStringField(const std::string& buf, const char* key)
+    {
+        return jsonStringAt(buf, jsonValuePos(buf, key));
+    }
+
+    // The quoted string that starts at/after `pos` (npos -> empty). Only
+    // whitespace may sit between the ':' and the opening quote: without that
+    // check a value of "null" or a number would happily "parse" as the *next*
+    // key's name, since a plain scan for the next '"' can't tell the two apart.
+    static std::string jsonStringAt(const std::string& buf, size_t pos)
+    {
+        if (pos == std::string::npos)
             return {};
-        const size_t colon = buf.find(':', keyPos + 14);
-        if (colon == std::string::npos)
-            return {};
-        const size_t q1 = buf.find('"', colon + 1);
+
+        const size_t q1 = buf.find('"', pos);
         if (q1 == std::string::npos)
             return {};
+        for (size_t i = pos; i < q1; ++i)
+        {
+            if (!std::isspace(static_cast<unsigned char>(buf[i])))
+                return {};
+        }
+
         const size_t q2 = buf.find('"', q1 + 1);
         if (q2 == std::string::npos)
             return {};
         return buf.substr(q1 + 1, q2 - q1 - 1);
+    }
+
+    // The number value of `key` ("sample_rate":48000), or -1.0 when the key
+    // is absent or its value isn't a number. Hand-rolled rather than
+    // std::strtod() because strtod honours the C locale's decimal
+    // separator: under a comma-decimal locale it would stop dead at the '.'
+    // of a fractional value and quietly return the integer part. Reading the
+    // digits directly is a few lines and can't be re-aimed by a locale.
+    static double jsonNumberField(const std::string& buf, const char* key)
+    {
+        size_t pos = jsonValuePos(buf, key);
+        if (pos == std::string::npos)
+            return -1.0;
+
+        while (pos < buf.size() && std::isspace(static_cast<unsigned char>(buf[pos])))
+            ++pos;
+
+        double value = 0.0;
+        bool anyDigits = false;
+        for (; pos < buf.size() && std::isdigit(static_cast<unsigned char>(buf[pos])); ++pos)
+        {
+            value = value * 10.0 + static_cast<double>(buf[pos] - '0');
+            anyDigits = true;
+        }
+        if (pos < buf.size() && buf[pos] == '.')
+        {
+            double scale = 1.0;
+            for (++pos; pos < buf.size() && std::isdigit(static_cast<unsigned char>(buf[pos])); ++pos)
+            {
+                scale *= 10.0;
+                value += static_cast<double>(buf[pos] - '0') / scale;
+                anyDigits = true;
+            }
+        }
+        // No digits at all means "sample_rate":null, or a prefix cut off
+        // right after the key - the same -1.0 sentinel NamFileInfo::sampleRate
+        // documents.
+        return anyDigits ? value : -1.0;
+    }
+
+    // How many times `needle` appears in the prefix read by readNamFileInfo()
+    // - the submodel count, where one "max_value" per submodel of an A2
+    // container is the only cheap signal available without a real parse.
+    // Advances past each hit so a degenerate empty needle can't spin here.
+    static int countOccurrences(const std::string& buf, const std::string& needle)
+    {
+        int count = 0;
+        for (size_t pos = buf.find(needle); pos != std::string::npos;
+             pos = buf.find(needle, pos + needle.size()))
+            ++count;
+        return count;
     }
 
     // ---------------- Presets: file I/O ----------------
@@ -2292,13 +2568,53 @@ private:
             // the file. Anything the old file didn't have falls back to
             // the same defaults a blank preset uses.
             //
+            // This format is positional over the whole Parameters enum and has
+            // no per-value keys, no header and no layout tag, so a value's
+            // meaning is decided entirely by which build wrote it. Four shapes
+            // exist, and telling them apart is mapPresetValues()'s whole job
+            // (it does it by value count - the only signal there is):
+            //
+            //   * Current (kParamCount values): everything up to the NAM
+            //     tone/quality block, then the output-only meters (ignored -
+            //     a meter is never a setting, the blank-preset zeros are used
+            //     instead), then the external-plugin slots.
+            //   * Plugin-era, pre-NAM (kParamCount - 5 values): a build that
+            //     had the plugin slots but not the NAM tone/quality parameters.
+            //     Its meter block sits exactly where the NAM block is now, so
+            //     those five file values are an old Input Level, CPU Load,
+            //     Tuner Hz, Buffer Size (512!) and Sample Rate (48000!) - which
+            //     the DSP would clamp to +12 dB Treble/Presence and full size,
+            //     i.e. presets saved before this build would load sounding
+            //     wrong. Dropped, and taken from kBlankPresetValues (0 dB, full
+            //     size) instead: exactly the state they had when the file was
+            //     written, because the parameters did not exist yet. Its plugin
+            //     values sit five slots earlier than they do now, hence the
+            //     shift in mapPresetValues().
+            //   * NAM-era, pre-plugin (kParamPlugin1On values, i.e. up to and
+            //     including the meter block): same layout as current, minus
+            //     the plugin slots - so it needs no shift, just the meters
+            //     skipped.
+            //   * Pre-NAM, pre-plugin (kParamNamBass + 5 values or fewer): the
+            //     meter block was the tail of the enum, so again it is where
+            //     the NAM block is now, and those values are dropped the same
+            //     way.
+            //
+            // Read every value line first, then decide how to map them. That
+            // order matters, because this format is positional and has no
+            // header saying which layout wrote it - see the mapping below.
+            //
             // foundEnd distinguishes "older file, fewer values than
             // kParamCount, terminated properly" (fine, fill the rest with
             // defaults below) from "file truncated/corrupted mid-write,
             // ENDPRESET never appears before EOF" (discard - otherwise a
             // crash mid-save would leave a bogus empty/default preset
             // permanently stuck in the list).
-            uint32_t i = 0;
+            //
+            // The cap is a sanity bound, not a real limit: no layout has more
+            // than kParamCount values, and a corrupt file with a million lines
+            // before its ENDPRESET must not become a million strings.
+            std::vector<float> raw;
+            raw.reserve(kParamCount);
             bool foundEnd = false;
             while (std::getline(f, line))
             {
@@ -2307,6 +2623,12 @@ private:
                     foundEnd = true;
                     break;
                 }
+                // STATE: lines are the preset's per-slot plugin state (the
+                // loaded plugin path/identifier - see CustomPreset::states), not
+                // parameters, so they must never be counted as values: the
+                // layout decision made below comes from how many *value* lines
+                // the file has, and one swallowed STATE line would make a
+                // legacy file look like a current one.
                 if (line.rfind("STATE:", 0) == 0)
                 {
                     const size_t eq = line.find('=', 6);
@@ -2317,19 +2639,93 @@ private:
                         p.states[key] = val;
                     }
                 }
-                else if (i < kParamCount)
-                {
-                    p.values[i] = std::strtof(line.c_str(), nullptr);
-                    ++i;
-                }
+                else if (raw.size() < kParamCount)
+                    raw.push_back(std::strtof(line.c_str(), nullptr));
             }
 
             if (foundEnd)
             {
-                for (uint32_t j = i; j < kParamCount; ++j)
-                    p.values[j] = kBlankPresetValues[j];
+                mapPresetValues(raw, p.values);
                 out.push_back(p);
             }
+        }
+    }
+
+    // Maps the raw value lines of one preset onto the Parameters enum, deciding
+    // which layout wrote them from how many there are (see
+    // parsePresetsFromStream()'s comment for what the two layouts are and why
+    // the count is the only signal available).
+    //
+    // Written as its own function because it is the one piece of preset I/O
+    // that has to be right for files written by *other* builds, and because
+    // getting it wrong is silent: the preset loads, it just sounds like a
+    // different preset.
+    static void mapPresetValues(const std::vector<float>& raw, float* out)
+    {
+        // The three layouts (see parsePresetsFromStream()) differ only at two
+        // boundaries, and both are fixed by the enum itself:
+        //
+        //  * kParamNamBass is where the NAM tone/quality block starts. In both
+        //    of the older layouts that exact slot is where the *meter* block
+        //    started instead, which is what makes the value-count check below
+        //    the only decision needed for those five.
+        //  * kParamInputLevel is where the meter block starts now, and
+        //    kParamPlugin1On must follow it (every plugin slot was appended
+        //    after the meters). A plugin-era file without the NAM block held
+        //    its plugin values five slots earlier than they live today, which
+        //    is the one shift this function has to apply.
+        static_assert(kParamNamBass + 5 == kParamInputLevel,
+                      "the legacy meter block must start at kParamNamBass and be "
+                      "five slots long for the count-based layout detection to hold");
+        static_assert(kParamPlugin1On == kParamSampleRate + 1,
+                      "the plugin slots must follow the meter block directly for the "
+                      "five-slot shift applied to plugin-era files to be correct");
+
+        // Defaults first: anything the file didn't hold at all (a legacy file's
+        // five NAM parameters, a truncated-but-terminated one) comes from the
+        // blank preset, which is what a parameter that never existed for that
+        // file should be.
+        for (uint32_t i = 0; i < kParamCount; ++i)
+            out[i] = kBlankPresetValues[i];
+
+        // Which of the three layouts wrote this file, from its value count
+        // alone:
+        //
+        //  * hasNamBlock: it is at least as long as the shape a build with the
+        //    NAM parameters and no plugin slots wrote - everything up to the
+        //    NAM block, those five, and the five meters (kParamPlugin1On
+        //    values). Everything shorter predates the NAM block, so its
+        //    124..128 are an old meter block.
+        //  * pluginEra: it is longer than the NAM block's own start, i.e. it has
+        //    plugin values - five enum slots earlier than they sit today when
+        //    there is no NAM block in front of them, hence the shift.
+        const bool hasNamBlock = raw.size() >= static_cast<size_t>(kParamPlugin1On);
+        const bool pluginEra = raw.size() > static_cast<size_t>(kParamInputLevel);
+        const bool shiftPlugins = pluginEra && !hasNamBlock;
+
+        for (size_t k = 0; k < raw.size(); ++k)
+        {
+            int target = static_cast<int>(k);
+
+            if (!hasNamBlock && k >= static_cast<size_t>(kParamNamBass)
+                && k < static_cast<size_t>(kParamInputLevel))
+            {
+                // In an older layout these five slots held the meter block, and
+                // a meter is never a setting: they stay at the blank-preset
+                // defaults (0 dB on all four bands, full A2 size) instead of
+                // being read as +12 dB Presence / "smallest submodel".
+                continue;
+            }
+
+            if (shiftPlugins && k >= static_cast<size_t>(kParamInputLevel))
+                target = static_cast<int>(k) + (kParamInputLevel - kParamNamBass);
+
+            if (target < 0 || target >= static_cast<int>(kParamCount))
+                continue; // longer than any layout this build knows about
+            if (isOutputOnlyParameter(static_cast<uint32_t>(target)))
+                continue; // meters: never read from a file, and always disabled
+
+            out[target] = raw[k];
         }
     }
 
@@ -2630,16 +3026,45 @@ private:
         return false;
     }
 
-    // Input Level, CPU Load and Tuner Frequency are kParameterIsOutput -
-    // live sensor readings the DSP writes and the host/UI only ever reads,
-    // never something a preset should capture or replay. Excluded from
-    // save/export (so a file doesn't freeze whatever the meter happened to
-    // read at save time) and from applyValuesArray() (so loading a preset
-    // never issues a UI-initiated edit/write gesture for a parameter the
-    // host contract says only the plugin itself writes).
+    // Input Level, CPU Load, Tuner Frequency, Buffer Size and Sample Rate are
+    // kParameterIsOutput - live sensor readings the DSP writes and the
+    // host/UI only ever reads, never something a preset should capture or
+    // replay. Excluded from save/export (so a file doesn't freeze whatever
+    // the meter happened to read at save time) and from applyValuesArray()
+    // (so loading a preset never issues a UI-initiated edit/write gesture for
+    // a parameter the host contract says only the plugin itself writes).
+    //
+    // All five are named rather than tested as one range (`index >=
+    // kParamInputLevel`), which is what this used to be when the meter block
+    // was the tail of the enum. It is not the tail any more: the
+    // external-plugin slots were appended after it, so a range test would now
+    // classify all 112 plugin parameters as meters - sanitizeOutputParams()
+    // would zero every one of them in every saved/exported/imported preset,
+    // and applyValuesArray() would silently refuse to apply them. Naming them
+    // means the group can be extended in one place; the asserts below are what
+    // stop the layout moving out from under that assumption again.
     static bool isOutputOnlyParameter(uint32_t index)
     {
-        return index == kParamInputLevel || index == kParamCpuLoad || index == kParamTunerFrequency;
+        static_assert(kParamCpuLoad == kParamInputLevel + 1, "the meter block must be contiguous");
+        static_assert(kParamTunerFrequency == kParamInputLevel + 2, "the meter block must be contiguous");
+        static_assert(kParamBufferSize == kParamInputLevel + 3, "the meter block must be contiguous");
+        static_assert(kParamSampleRate == kParamInputLevel + 4, "the meter block must be contiguous");
+        // Not required by this function, but both preset layouts in
+        // parsePresetsFromStream() assume it - see mapPresetValues().
+        static_assert(kParamPlugin1On == kParamSampleRate + 1,
+                      "the plugin slots must follow the meter block directly");
+
+        switch (index)
+        {
+        case kParamInputLevel:
+        case kParamCpuLoad:
+        case kParamTunerFrequency:
+        case kParamBufferSize:
+        case kParamSampleRate:
+            return true;
+        default:
+            return false;
+        }
     }
 
     // Zeroes the output-only slots in a kParamCount-sized values array
@@ -2677,6 +3102,12 @@ private:
             {
                 for (uint32_t i = 0; i < kParamCount; ++i)
                     existing.values[i] = paramValues[i];
+                // Same sanitise every other save path does (see
+                // isOutputOnlyParameter()): without it this overwrite froze
+                // the live meters - including the host's buffer size and
+                // sample rate - into the file, which is how the two of them
+                // used to end up stored as if they were settings.
+                sanitizeOutputParams(existing.values);
                 captureStatesForPreset(existing);
                 saveCustomPresetsToFile();
                 triggerSaveToast("Saved \"" + existing.name + "\"");
@@ -3586,6 +4017,97 @@ private:
     static float rackModuleWidth(float width)
     {
         return width - kModuleLeft - kSidebarWidth - kSidebarGap - 20.0f;
+    }
+
+    // One pedal card's knob-row geometry - the single source of truth shared
+    // by the paint loop in drawModuleCard() and the hit-test loop in
+    // onMouse(), for exactly the reason rackModuleWidth() above exists: a row
+    // that is drawn narrower than it is hit-tested (or vice versa) puts clicks
+    // on the wrong control, and that class of bug has already been fixed once
+    // in this file by hand.
+    //
+    // Why a row can need to compress at all: a card's knob row used to be a
+    // hardcoded `knobX = kModuleLeft + 50.0f; knobX += kKnobSpacing` loop, and
+    // that only works while the row is short enough. The NAM card now has 8
+    // knobs (Gain/Bass/Mid/Treble/Presence/Master/Mix/Size) *plus* its
+    // "Load NAM Model..." button: at the default 1100px window
+    // rackModuleWidth(1100) == 650, so the natural row would need
+    // 8 * 84 + 132 == 804px from firstX (854px card-relative) inside a 650px
+    // card, and the last few knobs plus the loader would all hang off its
+    // right edge.
+    //
+    // The rules, in order:
+    //   - The first knob always sits at kModuleLeft + 50.0f - unchanged from
+    //     the old hardcoded loop, so every card's row still starts where it
+    //     always did.
+    //   - Knob k sits at firstX + k * spacing. On a card with a file-loader
+    //     button, that button's *left* edge is the row's final knobX, i.e.
+    //     firstX + knobCount * spacing - which is exactly where the old loop
+    //     left knobX after its last kKnobSpacing step, so loader cards don't
+    //     shift (drawFileLoaderButton() takes its x, not a centre).
+    //   - The row has to stay inside kModuleLeft + moduleW - 12.0f, the same
+    //     12px right margin the card's own header controls (remove button,
+    //     bypass toggle) use.
+    //   - If the natural row already fits, the result is exactly
+    //     {firstX, kKnobSpacing, kValueChipW} - pixel-identical to the old
+    //     hardcoded row for every pedal that fitted before (Noise Gate 4
+    //     knobs, Amp 7, Cabinet 2 + loader, ...). The widest ink is what has
+    //     to fit, and it differs by card type: on a loader card it is the
+    //     loader's right edge (firstX + n*spacing + kFileLoaderW); on a card
+    //     without one it is the last knob's value chip, i.e. last centre +
+    //     kValueChipW/2 (the chip is centred under its knob and at 70px is
+    //     wider than the 44px knob face, so it, not the knob, is the edge).
+    //   - Otherwise the spacing shrinks to the largest that still fits -
+    //     (availableRight - firstX - kFileLoaderW) / knobCount for a loader
+    //     card, (availableRight - firstX - kValueChipW/2) / (knobCount - 1)
+    //     otherwise - clamped to kKnobRowMinSpacing (see its comment for why
+    //     that floor exists), and the value chips narrow with it:
+    //     min(kValueChipW, spacing - 2) keeps a 2px gap between neighbours
+    //     instead of letting them overlap.
+    //   - knobCount 0 and 1 never reach either division: count 0 is a bare
+    //     loader (nothing to divide), and the no-loader formula divides by
+    //     (count - 1), which is 0 for a single knob. Both simply take the
+    //     natural branch, where their row is a single knob (or a lone loader)
+    //     with nothing next to it, so there is nothing to compress anyway.
+    //
+    // One deliberate consequence: the kKnobRowMinSpacing floor wins over
+    // fitting. A window narrow enough that even 56px steps overflow (NAM
+    // needs moduleW >= 642, i.e. a ~1092px window, at that floor) has its row
+    // spill off the card's right edge rather than squeeze further -
+    // unreadable overlapping knobs help nobody, and the card body (and the
+    // part of it that accepts clicks) already ends at kModuleLeft + moduleW.
+    struct KnobRowLayout
+    {
+        float firstX;
+        float spacing;
+        float chipW;
+    };
+
+    static KnobRowLayout knobRowLayout(float moduleW, size_t knobCount, bool hasFileLoader)
+    {
+        const float firstX = kModuleLeft + 50.0f;
+        const float availableRight = kModuleLeft + moduleW - 12.0f;
+
+        const KnobRowLayout natural = { firstX, kKnobSpacing, kValueChipW };
+        if (knobCount <= 1)
+            return natural;
+
+        const float lastKnobX = firstX + static_cast<float>(knobCount - 1) * kKnobSpacing;
+        const float naturalRight = hasFileLoader
+            ? lastKnobX + kKnobSpacing + kFileLoaderW
+            : lastKnobX + kValueChipW * 0.5f;
+        if (naturalRight <= availableRight)
+            return natural;
+
+        const float spacing = hasFileLoader
+            ? (availableRight - firstX - kFileLoaderW) / static_cast<float>(knobCount)
+            : (availableRight - firstX - kValueChipW * 0.5f) / static_cast<float>(knobCount - 1);
+
+        KnobRowLayout compressed;
+        compressed.firstX  = firstX;
+        compressed.spacing = std::max(kKnobRowMinSpacing, spacing);
+        compressed.chipW   = std::min(kValueChipW, compressed.spacing - 2.0f);
+        return compressed;
     }
 
     float totalContentHeight() const
@@ -4514,8 +5036,8 @@ private:
     void drawCpuMeter(float rightX, float centerY, float load)
     {
         const Color dotColor = (load > 0.85f) ? kColorRemove
-                              : (load > 0.5f)  ? Color(230, 175, 60)
-                                                : kColorOn;
+                              : (load > 0.5f)  ? kColorWarn
+                                               : kColorOn;
 
         // Fixed-width layout (dot, then "CPU xx%" text) rather than
         // measuring the text and working backwards from rightX - simpler,
@@ -5016,7 +5538,7 @@ private:
             const std::string selectedText = audioSelectorText(which, selected);
             fontSize(11.0f);
             fillColor(selected == 0 ? kColorTextMuted
-                                    : (selected > 0 ? kColorTextPrimary : Color(230, 175, 60)));
+                                    : (selected > 0 ? kColorTextPrimary : kColorWarn));
             textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
             const std::string fittedSelection = truncateToFit(selectedText, rowW - 34.0f);
             text(rowX + 10.0f, centerY, fittedSelection.c_str(), nullptr);
@@ -5071,7 +5593,7 @@ private:
             {
                 beginPath();
                 circle(statusX + 3.5f, statusCY, 3.5f);
-                fillColor(hasOutput ? kColorOn : Color(230, 175, 60));
+                fillColor(hasOutput ? kColorOn : kColorWarn);
                 fill();
                 closePath();
             }
@@ -5309,7 +5831,10 @@ private:
         const float cx = width * 0.5f;
         const float cy = height * 0.5f;
 
-        char noteBuf[8];
+        // 16, not 8: "%s%d" with a name and an octave is at most a few bytes,
+        // but note.octave is an int and gcc's -Wformat-truncation cannot see
+        // the domain, so it has to be able to hold any int.
+        char noteBuf[16];
         if (hasSignal)
             std::snprintf(noteBuf, sizeof(noteBuf), "%s%d", note.name, note.octave);
         else
@@ -5351,7 +5876,7 @@ private:
 
             beginPath();
             circle(needleX, barY + barH * 0.5f, 9.0f);
-            fillColor(inTune ? kColorOn : Color(230, 175, 60));
+            fillColor(inTune ? kColorOn : kColorWarn);
             fill();
             closePath();
             beginPath();
@@ -5590,13 +6115,19 @@ private:
     }
 
     // A fixed status panel filling what used to be dead space to the right
-    // of the pedal rack (cards on their own only ever use the left ~400px
-    // of the full-width card for knobs - see rackModuleWidth()'s comment).
+    // of the pedal rack (cards on their own only ever use the left part of
+    // the full-width card for knobs - the Amp card's 7 knobs and, since the
+    // NAM card gained its amp-style tone stack, the NAM card's 8 knobs +
+    // loader are the widest rows there are - see rackModuleWidth() and
+    // knobRowLayout()'s comments).
     // Sits below the fixed Input panel in the same sidebar column (see
     // kStatusPanelTop). Shows things that don't belong on any one pedal
     // card: the host's sample rate and last-seen buffer size, and the NAM
-    // block's loaded model - filename and architecture (confirms an A2
-    // capture actually loaded as A2, not just silently falling back). No
+    // block's loaded model - filename, architecture, how many sizes it
+    // offers and the sample rate it was trained at (the architecture
+    // confirms an A2 capture actually loaded as A2 rather than silently
+    // falling back; the rate is there because it's the one property of a
+    // capture that AmpForge cannot honour - see the rate row below). No
     // Input Level meter here anymore - that used to be a second copy of
     // the one on the Input panel, kept around for when that panel had
     // scrolled out of view; now that the Input panel is fixed in this
@@ -5690,7 +6221,6 @@ private:
         textLetterSpacing(0.4f);
         text(labelX, rowY, "NAM MODEL", nullptr);
         textLetterSpacing(0.0f);
-        rowY += 22.0f;
 
         // Read straight from stateValues[kNamModelStateKey], same as the
         // pedal card's own file-loader button (drawFileLoaderButton()) -
@@ -5698,15 +6228,44 @@ private:
         // pick, so it's what actually reflects reality across every plugin
         // format (unlike the old architecture-name push from ChainPlugin,
         // which was a no-op on VST3/CLAP - see kNamModelStateKey's comment
-        // in ChainParameters.hpp). namArchitecture is derived client-side
-        // from that same file by readNamArchitecture() in stateChanged(),
-        // and doubles as the "did this actually look like a valid .nam
-        // file" signal - empty means either nothing has been picked yet or
-        // the last pick failed, either way there's nothing to show here.
+        // in ChainParameters.hpp). namFile is derived client-side from that
+        // same file by readNamFileInfo() in stateChanged(), and its
+        // architecture doubles as the "did this actually look like a valid
+        // .nam file" signal - empty means either nothing has been picked yet
+        // or the last pick failed, either way there's nothing to show here.
         const auto namPathIt = stateValues.find(kNamModelStateKey);
         const std::string namLoadedPath = (namPathIt != stateValues.end()) ? namPathIt->second : std::string();
+        const bool namModelLoaded = !namLoadedPath.empty() && !namFile.architecture.empty();
 
-        if (namLoadedPath.empty() || namArchitecture.empty())
+        // "A2 (2 sizes)" on the caption row, right-aligned like every other
+        // label/value pair in this panel. It can't join the architecture
+        // line below: that line only has valueX-(labelX+13) = 155px and
+        // "A2 SlimmableContainer (2 sizes)" measures ~186px in this font at
+        // 11px, so a single line would truncate away precisely the part that
+        // says how many sizes there are - the panel is 200px wide, there is
+        // no version of that sentence that fits. Split this way, "NAM MODEL"
+        // (68px, plus letter spacing) and the widest badge ("A2 (12 sizes)",
+        // 71px) share the row comfortably.
+        //
+        // Only shown for A2 captures: an A1 architecture isn't a container,
+        // so it has no sizes to count, and labelling one "A1" would be
+        // asserting something no field in the file actually says. The count
+        // is a proxy (see NamFileInfo::submodelCount), so when it didn't come
+        // through the badge degrades to a plain "A2" rather than claiming
+        // zero sizes. Gated on namModelLoaded as well, so it can never sit
+        // above a "No model loaded" line.
+        if (namModelLoaded && namFile.architecture == "SlimmableContainer")
+        {
+            std::string badge = "A2";
+            if (namFile.submodelCount > 0)
+                badge += " (" + std::to_string(namFile.submodelCount)
+                       + ((namFile.submodelCount == 1) ? " size)" : " sizes)");
+            textAlign(ALIGN_RIGHT | ALIGN_MIDDLE);
+            text(valueX, rowY, badge.c_str(), nullptr);
+        }
+        rowY += 22.0f;
+
+        if (!namModelLoaded)
         {
             fontSize(12.5f);
             fillColor(kColorTextMuted);
@@ -5736,8 +6295,35 @@ private:
 
             fontSize(11.0f);
             fillColor(kColorTextMuted);
-            const std::string fittedArch = truncateToFit(namArchitecture, valueX - (labelX + 13.0f));
+            const std::string fittedArch = truncateToFit(namFile.architecture, valueX - (labelX + 13.0f));
             text(labelX + 13.0f, rowY, fittedArch.c_str(), nullptr);
+
+            // The rate the capture itself was trained at - see
+            // NamFileInfo::sampleRate. Skipped entirely when the file
+            // doesn't declare one (A1 captures often don't): silence beats a
+            // lie, and a literal "unknown" would just be noise.
+            //
+            // A disagreement with the host rate earns the amber because it is
+            // the one property of a capture AmpForge cannot honour: it runs
+            // .nam models at whatever rate the project runs at and never
+            // resamples them, so a 48 kHz capture in a 44.1 kHz project is
+            // subtly not the amp its author heard. When the two agree there
+            // is nothing to warn about, so the host rate isn't repeated here
+            // (it's the "Sample Rate" row two rows up).
+            if (namFile.sampleRate > 0.0)
+            {
+                rowY += 16.0f;
+                const double hostRate = static_cast<double>(audioSampleRate());
+                const bool mismatch = std::fabs(namFile.sampleRate - hostRate) > 0.5;
+
+                std::string rateText = formatSampleRate(namFile.sampleRate);
+                if (mismatch)
+                    rateText += " (host " + formatSampleRate(hostRate) + ")";
+
+                fillColor(mismatch ? kColorWarn : kColorTextMuted);
+                const std::string fittedRate = truncateToFit(rateText, valueX - (labelX + 13.0f));
+                text(labelX + 13.0f, rowY, fittedRate.c_str(), nullptr);
+            }
         }
     }
 
@@ -5767,6 +6353,24 @@ private:
         fillColor(kColorTextPrimary);
         textAlign(ALIGN_RIGHT | ALIGN_MIDDLE);
         text(valueX, rowY, value, nullptr);
+    }
+
+    // "48000" -> "48 kHz", "44100" -> "44.1 kHz", "88200" -> "88.2 kHz".
+    // The Status panel's host rate row is published raw ("%.0f Hz") because
+    // kParamSampleRate is an integer parameter, but rates shown side by side
+    // for comparison read much better in kHz - and dropping a ".0" is what
+    // keeps "48 kHz" from looking like a different quantity than "44.1 kHz".
+    static std::string formatSampleRate(double hz)
+    {
+        const double khz = hz / 1000.0;
+        char buf[32];
+        // Rounded first so float noise from the parameter (48000 arriving as
+        // 47999.998) can't turn "48 kHz" into "48.0 kHz".
+        if (std::fabs(khz - std::round(khz)) < 0.01)
+            std::snprintf(buf, sizeof(buf), "%.0f kHz", khz);
+        else
+            std::snprintf(buf, sizeof(buf), "%.1f kHz", khz);
+        return buf;
     }
 
     // The fixed Input panel - a Gain trim knob plus a peak meter, pinned at
@@ -6851,6 +7455,34 @@ private:
         }
     }
 
+    // True for the one knob whose parameter does nothing in the current state:
+    // the NAM card's "Size" (kParamNamQuality). It only exists on A2
+    // "SlimmableContainer" captures - every other architecture (WaveNet,
+    // LSTM, ConvNet, Linear) has a fixed model size, and with no model loaded
+    // yet there is nothing to size at all. Expressed as a parameter check
+    // rather than a per-card flag so it stays correct no matter which card
+    // (or the dragged floating copy of it) is being drawn or hit-tested.
+    bool knobIsInert(const KnobDef& knob) const
+    {
+        return knob.paramIndex == kParamNamQuality && !namModelIsSlimmable();
+    }
+
+    // A2 captures report exactly this architecture string (read out of the
+    // .nam file by readNamFileInfo() in stateChanged()), and they are the
+    // only ones whose model size can be traded away for CPU - see
+    // NamBlock.hpp. namFile.architecture is empty until a model loads, which
+    // deliberately reads as "not slimmable".
+    //
+    // Deliberately keyed off the architecture and not off
+    // NamFileInfo::submodelCount, even though the count is what
+    // kParamNamQuality actually ranges over: the count is a heuristic (a
+    // plain "max_value" tally in a 64 KB prefix), so a slimmable capture
+    // whose submodels fell past the prefix - or one that genuinely has a
+    // single submodel - would report <= 1 and grey out a knob that does work.
+    // The architecture field is the authoritative statement that this is a
+    // container at all, and it's what decides whether the knob is live.
+    bool namModelIsSlimmable() const { return namFile.architecture == "SlimmableContainer"; }
+
     static void pluginHeaderButtonsRect(float moduleLeft, float drawY, float moduleW,
                                         float& guiX, float& guiY, float& guiW, float& guiH,
                                         float& paramsX, float& paramsY, float& paramsW, float& paramsH,
@@ -6882,7 +7514,6 @@ private:
         importX = browseX - 6.0f - importW;
         importY = btnY;
     }
-
     // Draws one pedal card at the given top-Y. Used both for the normal
     // stacked rack and (with a live, cursor-following y) for whichever card
     // is currently being dragged to reorder.
@@ -7238,18 +7869,28 @@ private:
             else
             {
                 const float knobCenterY = drawY + kModuleHeaderH + kKnobCenterYOffset;
-                float knobX = kModuleLeft + 50.0f;
+                const KnobRowLayout row = knobRowLayout(moduleW, def.knobs.size(), def.hasFileLoader);
                 for (size_t k = 0; k < def.knobs.size(); ++k)
                 {
                     const KnobDef& knob = def.knobs[k];
                     const bool isDraggingKnob = (pedalIndex == draggingKnobPedal && static_cast<int>(k) == draggingKnobIndex);
                     const bool isEditingKnob = (pedalIndex == editingKnobPedal && static_cast<int>(k) == editingKnobIndex);
-                    drawKnob(knobX, knobCenterY, knob, displayValues[knob.paramIndex], cardAccent, knobAlpha, isDraggingKnob, isEditingKnob);
-                    knobX += kKnobSpacing;
+                    // An inert knob (the NAM card's "Size" on a non-A2 capture,
+                    // see knobIsInert()) still has to be drawn - hiding it
+                    // would silently reshuffle the row between captures - so
+                    // it is dimmed hard instead, enough to read as
+                    // unavailable while staying legible. onMouse() refuses to
+                    // touch it in the same state, so this is the only signal
+                    // that it does nothing.
+                    const float knobDrawAlpha = knobIsInert(knob) ? knobAlpha * 0.35f : knobAlpha;
+                    drawKnob(row.firstX + static_cast<float>(k) * row.spacing, knobCenterY, knob,
+                             displayValues[knob.paramIndex], cardAccent, knobDrawAlpha, isDraggingKnob, isEditingKnob,
+                             row.chipW);
                 }
 
                 if (def.hasFileLoader)
-                    drawFileLoaderButton(knobX, knobCenterY, def, knobAlpha);
+                    drawFileLoaderButton(row.firstX + static_cast<float>(def.knobs.size()) * row.spacing,
+                                          knobCenterY, def, knobAlpha);
             }
     }
 
@@ -7325,7 +7966,12 @@ private:
         text(x + kFileLoaderW * 0.5f, y + kFileLoaderH * 0.5f, fitted.c_str(), nullptr);
     }
 
-    void drawKnob(float cx, float cy, const KnobDef& knob, float value, const Color& accent, float alpha, bool isDragging, bool isEditing)
+    // `chipW` is the width of the value readout chip under the knob. It
+    // defaults to kValueChipW, which is what every call site outside a pedal
+    // card wants (the Input panel's single knob), and is the width a
+    // compressed pedal row shrinks to instead - see knobRowLayout().
+    void drawKnob(float cx, float cy, const KnobDef& knob, float value, const Color& accent, float alpha, bool isDragging, bool isEditing,
+                  float chipW = kValueChipW)
     {
         const float t = (value - knob.minVal) / (knob.maxVal - knob.minVal);
         const float startAngle = 0.75f * static_cast<float>(M_PI);
@@ -7433,15 +8079,15 @@ private:
 
         const bool highlighted = isDragging || isEditing;
         const float chipY = cy + kKnobRadius + kValueChipGap;
-        const float chipX = cx - kValueChipW * 0.5f;
+        const float chipX = cx - chipW * 0.5f;
 
         beginPath();
-        roundedRect(chipX, chipY, kValueChipW, kValueChipH, 4.0f);
+        roundedRect(chipX, chipY, chipW, kValueChipH, 4.0f);
         fillColor((isEditing ? kColorBackground : kColorTooltipBg).withAlpha(alpha));
         fill();
         closePath();
         beginPath();
-        roundedRect(chipX, chipY, kValueChipW, kValueChipH, 4.0f);
+        roundedRect(chipX, chipY, chipW, kValueChipH, 4.0f);
         strokeWidth(1.0f);
         strokeColor((highlighted ? accent : Color(70, 70, 82)).withAlpha((highlighted ? 0.9f : 0.5f) * alpha));
         stroke();
@@ -7578,11 +8224,13 @@ private:
         return nullptr;
     }
 
-    // The currently loaded NAM model's architecture name, as read straight
-    // out of the .nam file by readNamArchitecture() - see stateChanged()'s
-    // kNamModelStateKey branch. Empty means either no model has been
-    // picked yet or the last pick didn't look like a valid .nam file.
-    std::string namArchitecture;
+
+    // What the currently loaded NAM model turned out to be, as read straight
+    // out of the .nam file by readNamFileInfo() - see stateChanged()'s
+    // kNamModelStateKey branch. architecture is empty until a model has been
+    // picked, or after a pick that didn't look like a valid .nam file, and
+    // everything that reads this treats empty as "no model".
+    NamFileInfo namFile;
 
     // --- Audio Settings modal (drawAudioSettings() and friends) ---
     // audioSettingsAnim is the usual exponential fade (see uiIdle()), kept

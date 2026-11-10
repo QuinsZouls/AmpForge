@@ -43,7 +43,7 @@ AMPFORGE_TEST(vst3_loader_and_gain_plugin_test)
     CHECK(node.setPlugin(std::move(vst3)));
 
     float nodeBuf[4] = { 0.4f, -0.8f, 1.0f, -0.2f };
-    node.processBlock(nodeBuf, 4);
+    node.processBlock(nodeBuf, nodeBuf, 4);
 
     CHECK_NEAR(nodeBuf[0], 0.3f, 1e-5f);
     CHECK_NEAR(nodeBuf[1], -0.6f, 1e-5f);

@@ -53,7 +53,7 @@ AMPFORGE_TEST(clap_loader_and_gain_plugin_test)
     CHECK(node.setPlugin(std::move(clap)));
 
     float nodeBuf[4] = { 0.1f, -0.2f, 0.5f, -0.8f };
-    node.processBlock(nodeBuf, 4);
+    node.processBlock(nodeBuf, nodeBuf, 4);
 
     // With node gain=2.5 and mix=1.0:
     CHECK_NEAR(nodeBuf[0], 0.25f, 1e-5f);
