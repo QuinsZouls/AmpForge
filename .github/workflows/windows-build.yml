@@ -17,12 +17,18 @@ name: Windows build
 # so creating it in both places would race. Instead this waits for the
 # Linux workflow's release to show up first, then attaches the installer
 # to it.
+# Deliberately NOT run on pull_request: the PR gate is linux-build.yml only
+# (its native test job plus the Docker glibc-baseline build), so a PR never
+# waits on a macOS/Windows runner for feedback that the Linux jobs already
+# give. These two still run on every push to main and on `v*` tags, so main
+# stays continuously verified on both platforms and releases still get their
+# macOS zip / Windows installer built by the same script a dev machine uses.
+# A one-off check on an arbitrary branch is still possible: this `on:`
+# block keeps workflow_dispatch for exactly that.
 on:
   push:
     branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

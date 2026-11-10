@@ -18,6 +18,11 @@ name: Linux build
 # what caused it to fail to load there in the first place - having every
 # tagged release go through this one automated, always-portable path
 # instead removes that whole class of mistake.
+#
+# This is also the only workflow that runs on pull_request: the macOS and
+# Windows builds still run on every push to main and on tags (so releases
+# keep being built on both), but they no longer gate a PR - see the comment
+# in macos-build.yml / windows-build.yml for why.
 on:
   push:
     branches: [main]
