@@ -70,13 +70,18 @@ void PluginBrowserModal::updateFilter() {
 
     for (const auto& p : allPlugins) {
         if (selectedTab == 1 && p.format != PluginFormat::LV2) continue;
-        if (selectedTab == 2 && p.format != PluginFormat::VST3) continue;
-        if (selectedTab == 3 && p.format != PluginFormat::CLAP) continue;
+        if (selectedTab == 2 && !p.isMod) continue;
+        if (selectedTab == 3 && p.format != PluginFormat::VST3) continue;
+        if (selectedTab == 4 && p.format != PluginFormat::CLAP) continue;
 
         if (!q.empty()) {
             std::string nameLower = toLower(p.name);
             std::string vendorLower = toLower(p.vendor);
-            if (nameLower.find(q) == std::string::npos && vendorLower.find(q) == std::string::npos) {
+            std::string brandLower = toLower(p.modBrand);
+            if (nameLower.find(q) == std::string::npos &&
+                vendorLower.find(q) == std::string::npos &&
+                brandLower.find(q) == std::string::npos &&
+                (!p.isMod || q != "mod")) {
                 continue;
             }
         }
@@ -169,17 +174,23 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
     vg->text(closeX + 12.0f, closeY + 12.0f, "X", nullptr);
 
     // Filter Tabs
-    const char* tabs[4] = { "ALL", "LV2", "VST3", "CLAP" };
+    const char* tabs[5] = { "ALL", "LV2", "MOD", "VST3", "CLAP" };
+    const float tabW = 54.0f;
+    const float tabGap = 6.0f;
     float tabX = boxX + 24.0f;
     const float tabY = boxY + 54.0f;
-    for (int t = 0; t < 4; ++t) {
+    for (int t = 0; t < 5; ++t) {
         const bool selected = (selectedTab == t);
-        const bool hovered = pointInRect(lastMouseX, lastMouseY, tabX, tabY, 60.0f, 26.0f);
+        const bool hovered = pointInRect(lastMouseX, lastMouseY, tabX, tabY, tabW, 26.0f);
 
         vg->beginPath();
-        vg->roundedRect(tabX, tabY, 60.0f, 26.0f, 4.0f);
+        vg->roundedRect(tabX, tabY, tabW, 26.0f, 4.0f);
         if (selected) {
-            vg->fillColor(DGL_NAMESPACE::Color(95, 225, 145, 0.3f));
+            if (t == 2) {
+                vg->fillColor(DGL_NAMESPACE::Color(0, 210, 106, 0.35f));
+            } else {
+                vg->fillColor(DGL_NAMESPACE::Color(95, 225, 145, 0.3f));
+            }
         } else if (hovered) {
             vg->fillColor(DGL_NAMESPACE::Color(255, 255, 255, 0.08f));
         } else {
@@ -188,18 +199,22 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
         vg->fill();
         vg->closePath();
 
-        vg->fontSize(11.0f);
-        vg->fillColor(selected ? DGL_NAMESPACE::Color(95, 225, 145) : DGL_NAMESPACE::Color(180, 180, 190));
+        vg->fontSize(10.5f);
+        if (selected) {
+            vg->fillColor(t == 2 ? DGL_NAMESPACE::Color(0, 230, 120) : DGL_NAMESPACE::Color(95, 225, 145));
+        } else {
+            vg->fillColor(DGL_NAMESPACE::Color(180, 180, 190));
+        }
         vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
-        vg->text(tabX + 30.0f, tabY + 13.0f, tabs[t], nullptr);
+        vg->text(tabX + tabW * 0.5f, tabY + 13.0f, tabs[t], nullptr);
 
-        tabX += 66.0f;
+        tabX += (tabW + tabGap);
     }
 
     // Search Bar
-    const float searchX = boxX + 300.0f;
+    const float searchX = boxX + 334.0f;
     const float searchY = tabY;
-    const float searchW = kModalW - 324.0f;
+    const float searchW = kModalW - 358.0f;
     const float searchH = 26.0f;
 
     vg->beginPath();
@@ -268,10 +283,19 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
 
                 // Format badge
                 DGL_NAMESPACE::Color badgeColor;
-                if (p.format == PluginFormat::LV2) badgeColor = DGL_NAMESPACE::Color(95, 225, 145);
-                else if (p.format == PluginFormat::VST3) badgeColor = DGL_NAMESPACE::Color(90, 170, 255);
-                else if (p.format == PluginFormat::CLAP) badgeColor = DGL_NAMESPACE::Color(235, 155, 60);
-                else badgeColor = DGL_NAMESPACE::Color(180, 180, 180);
+                const char* badgeStr = formatToString(p.format);
+                if (p.isMod) {
+                    badgeColor = DGL_NAMESPACE::Color(0, 210, 106);
+                    badgeStr = "MOD";
+                } else if (p.format == PluginFormat::LV2) {
+                    badgeColor = DGL_NAMESPACE::Color(95, 225, 145);
+                } else if (p.format == PluginFormat::VST3) {
+                    badgeColor = DGL_NAMESPACE::Color(90, 170, 255);
+                } else if (p.format == PluginFormat::CLAP) {
+                    badgeColor = DGL_NAMESPACE::Color(235, 155, 60);
+                } else {
+                    badgeColor = DGL_NAMESPACE::Color(180, 180, 180);
+                }
 
                 vg->beginPath();
                 vg->roundedRect(listX + 12.0f, rowY + 10.0f, 40.0f, 18.0f, 3.0f);
@@ -285,7 +309,7 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
                 vg->fontSize(9.0f);
                 vg->fillColor(badgeColor);
                 vg->textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
-                vg->text(listX + 32.0f, rowY + 19.0f, formatToString(p.format), nullptr);
+                vg->text(listX + 32.0f, rowY + 19.0f, badgeStr, nullptr);
 
                 float nameX = listX + 62.0f;
                 if (p.hasCustomUI) {
@@ -305,11 +329,15 @@ void PluginBrowserModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heig
                     nameX += 28.0f;
                 }
 
-                // Plugin Name
+                // Plugin Name (include MOD brand if available)
+                std::string displayName = p.name;
+                if (p.isMod && !p.modBrand.empty() && displayName.find(p.modBrand) == std::string::npos) {
+                    displayName = p.modBrand + " \xe2\x80\x94 " + displayName;
+                }
                 vg->fontSize(12.0f);
                 vg->fillColor(DGL_NAMESPACE::Color(240, 240, 245));
                 vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
-                vg->text(nameX, rowY + 19.0f, p.name.c_str(), nullptr);
+                vg->text(nameX, rowY + 19.0f, displayName.c_str(), nullptr);
 
                 // Built-in status / Import button
                 bool isBuiltin = false;
@@ -402,15 +430,17 @@ bool PluginBrowserModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
         }
 
         // Filter tabs
+        const float tabW = 54.0f;
+        const float tabGap = 6.0f;
         float tabX = boxX + 24.0f;
         const float tabY = boxY + 54.0f;
-        for (int t = 0; t < 4; ++t) {
-            if (pointInRect(lastMouseX, lastMouseY, tabX, tabY, 60.0f, 26.0f)) {
+        for (int t = 0; t < 5; ++t) {
+            if (pointInRect(lastMouseX, lastMouseY, tabX, tabY, tabW, 26.0f)) {
                 selectedTab = t;
                 updateFilter();
                 return true;
             }
-            tabX += 66.0f;
+            tabX += (tabW + tabGap);
         }
 
         // Plugin row click

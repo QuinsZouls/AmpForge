@@ -22,6 +22,8 @@ typedef struct LilvPortImpl LilvPort;
 typedef struct LilvNodeImpl LilvNode;
 typedef struct LilvNodesImpl LilvNodes;
 typedef struct LilvStateImpl LilvState;
+typedef struct LilvScalePointsImpl LilvScalePoints;
+typedef struct LilvScalePointImpl LilvScalePoint;
 typedef void LilvIter;
 
 struct LilvInstance {
@@ -79,6 +81,28 @@ struct LilvSymbols {
     bool (*port_is_a)(const LilvPlugin*, const LilvPort*, const LilvNode*) = nullptr;
     void (*port_get_range)(const LilvPlugin*, const LilvPort*, LilvNode**, LilvNode**, LilvNode**) = nullptr;
     bool (*port_has_property)(const LilvPlugin*, const LilvPort*, const LilvNode*) = nullptr;
+
+    // Scale Points
+    LilvScalePoints* (*port_get_scale_points)(const LilvPlugin*, const LilvPort*) = nullptr;
+    unsigned (*scale_points_size)(const LilvScalePoints*) = nullptr;
+    LilvIter* (*scale_points_begin)(const LilvScalePoints*) = nullptr;
+    const LilvScalePoint* (*scale_points_get)(const LilvScalePoints*, LilvIter*) = nullptr;
+    LilvIter* (*scale_points_next)(const LilvScalePoints*, LilvIter*) = nullptr;
+    bool (*scale_points_is_end)(const LilvScalePoints*, LilvIter*) = nullptr;
+    const LilvNode* (*scale_point_get_label)(const LilvScalePoint*) = nullptr;
+    const LilvNode* (*scale_point_get_value)(const LilvScalePoint*) = nullptr;
+    void (*scale_points_free)(LilvScalePoints*) = nullptr;
+
+    // Nodes & World query
+    LilvNodes* (*plugin_get_value)(const LilvPlugin*, const LilvNode*) = nullptr;
+    LilvNodes* (*world_find_nodes)(LilvWorld*, const LilvNode*, const LilvNode*, const LilvNode*) = nullptr;
+    const LilvNode* (*nodes_get_first)(const LilvNodes*) = nullptr;
+    LilvIter* (*nodes_begin)(const LilvNodes*) = nullptr;
+    const LilvNode* (*nodes_get)(const LilvNodes*, LilvIter*) = nullptr;
+    LilvIter* (*nodes_next)(const LilvNodes*, LilvIter*) = nullptr;
+    bool (*nodes_is_end)(const LilvNodes*, LilvIter*) = nullptr;
+    unsigned (*nodes_size)(const LilvNodes*) = nullptr;
+    void (*nodes_free)(LilvNodes*) = nullptr;
 
     void (*free_mem)(void*) = nullptr;
 };
@@ -180,6 +204,29 @@ private:
         ok &= loadSym(s.port_is_a, "lilv_port_is_a");
         ok &= loadSym(s.port_get_range, "lilv_port_get_range");
         ok &= loadSym(s.port_has_property, "lilv_port_has_property");
+
+        // Scale Points
+        loadSym(s.port_get_scale_points, "lilv_port_get_scale_points");
+        loadSym(s.scale_points_size, "lilv_scale_points_size");
+        loadSym(s.scale_points_begin, "lilv_scale_points_begin");
+        loadSym(s.scale_points_get, "lilv_scale_points_get");
+        loadSym(s.scale_points_next, "lilv_scale_points_next");
+        loadSym(s.scale_points_is_end, "lilv_scale_points_is_end");
+        loadSym(s.scale_point_get_label, "lilv_scale_point_get_label");
+        loadSym(s.scale_point_get_value, "lilv_scale_point_get_value");
+        loadSym(s.scale_points_free, "lilv_scale_points_free");
+
+        // Nodes & World query
+        loadSym(s.plugin_get_value, "lilv_plugin_get_value");
+        loadSym(s.world_find_nodes, "lilv_world_find_nodes");
+        loadSym(s.nodes_get_first, "lilv_nodes_get_first");
+        loadSym(s.nodes_begin, "lilv_nodes_begin");
+        loadSym(s.nodes_get, "lilv_nodes_get");
+        loadSym(s.nodes_next, "lilv_nodes_next");
+        loadSym(s.nodes_is_end, "lilv_nodes_is_end");
+        loadSym(s.nodes_size, "lilv_nodes_size");
+        loadSym(s.nodes_free, "lilv_nodes_free");
+
         ok &= loadSym(s.free_mem, "lilv_free");
 
         loaded = ok;

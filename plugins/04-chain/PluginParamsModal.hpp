@@ -2,6 +2,7 @@
 
 #include "host/HostedPlugin.hpp"
 #include <Widget.hpp>
+#include <NanoVG.hpp>
 #include <string>
 #include <vector>
 #include <functional>
@@ -49,6 +50,16 @@ private:
     std::string pluginTitle;
     std::string pluginFormat;
     std::vector<ParamRow> rows;
+
+    // MOD Devices support
+    bool isMod = false;
+    std::string modBrand;
+    std::string modLabel;
+    std::string modScreenshotPath;
+    std::string modThumbnailPath;
+    std::unique_ptr<DGL_NAMESPACE::NanoImage> modImage;
+    std::string loadedImagePath;
+    bool showPedalView = false;
 
     float scrollY = 0.0f;
     int draggingSliderIdx = -1;

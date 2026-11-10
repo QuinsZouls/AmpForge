@@ -1885,9 +1885,39 @@ protected:
                 {
                     const uint32_t count = active->getParameterCount();
                     int m = 0;
+                    if (active->isModPlugin())
+                    {
+                        const auto modPorts = active->getModguiPortSymbols();
+                        for (const auto& sym : modPorts)
+                        {
+                            if (m >= kPluginMacroCount) break;
+                            for (uint32_t i = 0; i < count; ++i)
+                            {
+                                auto info = active->getParameterInfo(i);
+                                if (info.symbol == sym)
+                                {
+                                    std::string lower = info.name;
+                                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                                    if (lower.find("bypass") == std::string::npos && lower.find("enable") == std::string::npos)
+                                    {
+                                        pluginSlots[s].macroMap[m++] = info.id;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     for (uint32_t i = 0; i < count && m < kPluginMacroCount; ++i)
                     {
                         auto info = active->getParameterInfo(i);
+                        bool already = false;
+                        for (int k = 0; k < m; ++k)
+                        {
+                            if (pluginSlots[s].macroMap[k] == info.id) { already = true; break; }
+                        }
+                        if (already) continue;
+
                         std::string lower = info.name;
                         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                         if (lower.find("bypass") != std::string::npos || lower.find("enable") != std::string::npos)

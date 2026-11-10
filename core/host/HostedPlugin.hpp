@@ -23,6 +23,11 @@ inline const char* formatToString(PluginFormat fmt) {
 }
 
 struct PluginParamInfo {
+    struct ScalePoint {
+        float value = 0.0f;
+        std::string label;
+    };
+
     uint32_t id = 0;
     std::string symbol;
     std::string name;
@@ -33,6 +38,9 @@ struct PluginParamInfo {
     bool isInteger = false;
     bool isBoolean = false;
     bool isLogarithmic = false;
+    bool isEnumeration = false;
+    std::vector<ScalePoint> scalePoints;
+    std::string group;
 };
 
 struct PluginDescriptor {
@@ -46,6 +54,15 @@ struct PluginDescriptor {
     uint32_t numAudioInputs = 0;
     uint32_t numAudioOutputs = 0;
     bool hasCustomUI = false;
+
+    // MOD Devices metadata
+    bool isMod = false;
+    std::string modBrand;
+    std::string modLabel;
+    std::string modModel;
+    std::string modScreenshot;
+    std::string modThumbnail;
+    std::vector<std::string> modguiPortSymbols;
 };
 
 class HostedPlugin {
@@ -87,6 +104,15 @@ public:
     virtual void idleUI() {}
     virtual void getUISize(uint32_t& width, uint32_t& height) const { width = 0; height = 0; }
     virtual bool resizeUI(uint32_t width, uint32_t height) { (void)width; (void)height; return false; }
+
+    // MOD Devices support
+    virtual bool isModPlugin() const { return false; }
+    virtual std::string getModBrand() const { return {}; }
+    virtual std::string getModLabel() const { return {}; }
+    virtual std::string getModModel() const { return {}; }
+    virtual std::string getModScreenshotPath() const { return {}; }
+    virtual std::string getModThumbnailPath() const { return {}; }
+    virtual std::vector<std::string> getModguiPortSymbols() const { return {}; }
 };
 
 } // namespace ampforge

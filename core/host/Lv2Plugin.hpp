@@ -38,6 +38,15 @@ public:
     std::string saveState() const override;
     bool loadState(const std::string& state) override;
 
+    // MOD Devices support
+    bool isModPlugin() const override { return isMod; }
+    std::string getModBrand() const override { return modBrand; }
+    std::string getModLabel() const override { return modLabel; }
+    std::string getModModel() const override { return modModel; }
+    std::string getModScreenshotPath() const override { return modScreenshotPath; }
+    std::string getModThumbnailPath() const override { return modThumbnailPath; }
+    std::vector<std::string> getModguiPortSymbols() const override { return modguiPortSymbols; }
+
     const std::string& getLastError() const { return lastError; }
 
 private:
@@ -53,6 +62,9 @@ private:
         bool isInteger = false;
         bool isBoolean = false;
         bool isLogarithmic = false;
+        bool isEnumeration = false;
+        std::vector<PluginParamInfo::ScalePoint> scalePoints;
+        std::string group;
     };
 
     struct ControlOutPort {
@@ -65,6 +77,15 @@ private:
     std::string pluginName;
     std::string vendorName;
     std::string lastError;
+
+    // MOD Devices metadata
+    bool isMod = false;
+    std::string modBrand;
+    std::string modLabel;
+    std::string modModel;
+    std::string modScreenshotPath;
+    std::string modThumbnailPath;
+    std::vector<std::string> modguiPortSymbols;
 
     LilvWorld* world = nullptr;
     const LilvPlugin* plugin = nullptr;

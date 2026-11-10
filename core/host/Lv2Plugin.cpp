@@ -117,6 +117,178 @@ bool Lv2Plugin::load(const std::string& uri, const std::string& bundlePath) {
         vendorName = "Unknown";
     }
 
+    // Check for MOD Devices metadata
+    if (syms.plugin_get_value && syms.nodes_get_first) {
+        LilvNode* pModBrand = syms.new_uri(world, "http://moddevices.com/ns/mod#brand");
+        LilvNodes* vModBrand = syms.plugin_get_value(plugin, pModBrand);
+        if (vModBrand) {
+            const LilvNode* n = syms.nodes_get_first(vModBrand);
+            if (n) {
+                const char* s = syms.node_as_string(n);
+                if (s) modBrand = s;
+            }
+            if (syms.nodes_free) syms.nodes_free(vModBrand);
+        }
+        syms.node_free(pModBrand);
+
+        LilvNode* pModLabel = syms.new_uri(world, "http://moddevices.com/ns/mod#label");
+        LilvNodes* vModLabel = syms.plugin_get_value(plugin, pModLabel);
+        if (vModLabel) {
+            const LilvNode* n = syms.nodes_get_first(vModLabel);
+            if (n) {
+                const char* s = syms.node_as_string(n);
+                if (s) modLabel = s;
+            }
+            if (syms.nodes_free) syms.nodes_free(vModLabel);
+        }
+        syms.node_free(pModLabel);
+
+        LilvNode* pModGui = syms.new_uri(world, "http://moddevices.com/ns/modgui#gui");
+        LilvNodes* vModGui = syms.plugin_get_value(plugin, pModGui);
+        if (vModGui) {
+            const LilvNode* guiNode = syms.nodes_get_first(vModGui);
+            if (guiNode && syms.world_find_nodes) {
+                isMod = true;
+
+                // Screenshot
+                LilvNode* pScr = syms.new_uri(world, "http://moddevices.com/ns/modgui#screenshot");
+                LilvNodes* vScr = syms.world_find_nodes(world, guiNode, pScr, nullptr);
+                if (vScr) {
+                    const LilvNode* fn = syms.nodes_get_first(vScr);
+                    if (fn) {
+                        char* p = syms.node_get_path ? syms.node_get_path(fn, nullptr) : nullptr;
+                        if (p) {
+                            modScreenshotPath = p;
+                            if (syms.free_mem) syms.free_mem(p);
+                        } else {
+                            const char* s = syms.node_as_string(fn);
+                            if (s) {
+                                std::string sStr = s;
+                                if (sStr.rfind("file://", 0) == 0) sStr = sStr.substr(7);
+                                modScreenshotPath = sStr;
+                            }
+                        }
+                    }
+                    if (syms.nodes_free) syms.nodes_free(vScr);
+                }
+                syms.node_free(pScr);
+
+                // Thumbnail
+                LilvNode* pThm = syms.new_uri(world, "http://moddevices.com/ns/modgui#thumbnail");
+                LilvNodes* vThm = syms.world_find_nodes(world, guiNode, pThm, nullptr);
+                if (vThm) {
+                    const LilvNode* fn = syms.nodes_get_first(vThm);
+                    if (fn) {
+                        char* p = syms.node_get_path ? syms.node_get_path(fn, nullptr) : nullptr;
+                        if (p) {
+                            modThumbnailPath = p;
+                            if (syms.free_mem) syms.free_mem(p);
+                        } else {
+                            const char* s = syms.node_as_string(fn);
+                            if (s) {
+                                std::string sStr = s;
+                                if (sStr.rfind("file://", 0) == 0) sStr = sStr.substr(7);
+                                modThumbnailPath = sStr;
+                            }
+                        }
+                    }
+                    if (syms.nodes_free) syms.nodes_free(vThm);
+                }
+                syms.node_free(pThm);
+
+                // Brand override inside modgui
+                if (modBrand.empty()) {
+                    LilvNode* pB = syms.new_uri(world, "http://moddevices.com/ns/modgui#brand");
+                    LilvNodes* vB = syms.world_find_nodes(world, guiNode, pB, nullptr);
+                    if (vB) {
+                        const LilvNode* fn = syms.nodes_get_first(vB);
+                        if (fn) {
+                            const char* s = syms.node_as_string(fn);
+                            if (s) modBrand = s;
+                        }
+                        if (syms.nodes_free) syms.nodes_free(vB);
+                    }
+                    syms.node_free(pB);
+                }
+
+                // Label override inside modgui
+                if (modLabel.empty()) {
+                    LilvNode* pL = syms.new_uri(world, "http://moddevices.com/ns/modgui#label");
+                    LilvNodes* vL = syms.world_find_nodes(world, guiNode, pL, nullptr);
+                    if (vL) {
+                        const LilvNode* fn = syms.nodes_get_first(vL);
+                        if (fn) {
+                            const char* s = syms.node_as_string(fn);
+                            if (s) modLabel = s;
+                        }
+                        if (syms.nodes_free) syms.nodes_free(vL);
+                    }
+                    syms.node_free(pL);
+                }
+
+                // Model
+                LilvNode* pM = syms.new_uri(world, "http://moddevices.com/ns/modgui#model");
+                LilvNodes* vM = syms.world_find_nodes(world, guiNode, pM, nullptr);
+                if (vM) {
+                    const LilvNode* fn = syms.nodes_get_first(vM);
+                    if (fn) {
+                        const char* s = syms.node_as_string(fn);
+                        if (s) modModel = s;
+                    }
+                    if (syms.nodes_free) syms.nodes_free(vM);
+                }
+                syms.node_free(pM);
+
+                // MOD Ports
+                LilvNode* pPorts = syms.new_uri(world, "http://moddevices.com/ns/modgui#port");
+                LilvNodes* portNodes = syms.world_find_nodes(world, guiNode, pPorts, nullptr);
+                if (portNodes && syms.nodes_begin) {
+                    struct ModPortItem {
+                        int index = 0;
+                        std::string symbol;
+                    };
+                    std::vector<ModPortItem> items;
+                    LilvNode* pSym = syms.new_uri(world, "http://lv2plug.in/ns/lv2core#symbol");
+                    LilvNode* pIdx = syms.new_uri(world, "http://lv2plug.in/ns/lv2core#index");
+                    for (LilvIter* it = syms.nodes_begin(portNodes); !syms.nodes_is_end(portNodes, it); it = syms.nodes_next(portNodes, it)) {
+                        const LilvNode* pn = syms.nodes_get(portNodes, it);
+                        LilvNodes* sN = syms.world_find_nodes(world, pn, pSym, nullptr);
+                        LilvNodes* iN = syms.world_find_nodes(world, pn, pIdx, nullptr);
+                        const LilvNode* sVal = sN ? syms.nodes_get_first(sN) : nullptr;
+                        const LilvNode* iVal = iN ? syms.nodes_get_first(iN) : nullptr;
+                        if (sVal) {
+                            ModPortItem mpi;
+                            const char* ss = syms.node_as_string(sVal);
+                            if (ss) mpi.symbol = ss;
+                            mpi.index = iVal ? syms.node_as_int(iVal) : static_cast<int>(items.size());
+                            items.push_back(mpi);
+                        }
+                        if (sN && syms.nodes_free) syms.nodes_free(sN);
+                        if (iN && syms.nodes_free) syms.nodes_free(iN);
+                    }
+                    syms.node_free(pSym);
+                    syms.node_free(pIdx);
+                    if (syms.nodes_free) syms.nodes_free(portNodes);
+
+                    std::sort(items.begin(), items.end(), [](const auto& a, const auto& b) {
+                        return a.index < b.index;
+                    });
+                    modguiPortSymbols.clear();
+                    for (const auto& item : items) {
+                        modguiPortSymbols.push_back(item.symbol);
+                    }
+                }
+                syms.node_free(pPorts);
+            }
+            if (syms.nodes_free) syms.nodes_free(vModGui);
+        }
+        syms.node_free(pModGui);
+
+        if (!modBrand.empty() || !modLabel.empty()) {
+            isMod = true;
+        }
+    }
+
     discoverPorts();
 
     if (audioInPorts.empty() || audioOutPorts.empty()) {
@@ -200,6 +372,32 @@ void Lv2Plugin::discoverPorts() {
             cp.isBoolean = syms.port_has_property(plugin, port, toggledProp);
             cp.isLogarithmic = syms.port_has_property(plugin, port, logProp);
 
+            // Check scale points
+            if (syms.port_get_scale_points && syms.scale_points_begin) {
+                LilvScalePoints* sp = syms.port_get_scale_points(plugin, port);
+                if (sp) {
+                    for (LilvIter* it = syms.scale_points_begin(sp); !syms.scale_points_is_end(sp, it); it = syms.scale_points_next(sp, it)) {
+                        const LilvScalePoint* pt = syms.scale_points_get(sp, it);
+                        const LilvNode* lblNode = syms.scale_point_get_label(pt);
+                        const LilvNode* valNode = syms.scale_point_get_value(pt);
+                        if (lblNode && valNode) {
+                            PluginParamInfo::ScalePoint spItem;
+                            spItem.value = syms.node_as_float(valNode);
+                            const char* s = syms.node_as_string(lblNode);
+                            if (s) spItem.label = s;
+                            cp.scalePoints.push_back(spItem);
+                        }
+                    }
+                    if (syms.scale_points_free) syms.scale_points_free(sp);
+                    std::sort(cp.scalePoints.begin(), cp.scalePoints.end(), [](const auto& a, const auto& b) {
+                        return a.value < b.value;
+                    });
+                    if (!cp.scalePoints.empty()) {
+                        cp.isEnumeration = true;
+                    }
+                }
+            }
+
             controlPorts.push_back(cp);
         } else if (isControl && isOutput) {
             if (static_cast<int>(i) == latIdx) {
@@ -238,6 +436,14 @@ void Lv2Plugin::unload() {
     pluginUri.clear();
     pluginName.clear();
     vendorName.clear();
+
+    isMod = false;
+    modBrand.clear();
+    modLabel.clear();
+    modModel.clear();
+    modScreenshotPath.clear();
+    modThumbnailPath.clear();
+    modguiPortSymbols.clear();
 }
 
 bool Lv2Plugin::activate(double sampleRate, uint32_t maxBlockSize) {
@@ -360,6 +566,9 @@ PluginParamInfo Lv2Plugin::getParameterInfo(uint32_t index) const {
         info.isInteger = cp.isInteger;
         info.isBoolean = cp.isBoolean;
         info.isLogarithmic = cp.isLogarithmic;
+        info.isEnumeration = cp.isEnumeration;
+        info.scalePoints = cp.scalePoints;
+        info.group = cp.group;
     }
     return info;
 }

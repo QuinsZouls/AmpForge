@@ -48,7 +48,7 @@ private:
     std::vector<PluginDescriptor> filteredPlugins;
 
     std::string searchQuery;
-    int selectedTab = 0; // 0=ALL, 1=LV2, 2=VST3, 3=CLAP
+    int selectedTab = 0; // 0=ALL, 1=LV2, 2=MOD, 3=VST3, 4=CLAP
     float scrollY = 0.0f;
     int hoveredIndex = -1;
 

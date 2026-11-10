@@ -571,6 +571,8 @@ struct SlotMacroParamInfo {
     int decimals = 1;
     uint32_t paramId = 0xFFFFFFFF;
     bool mapped = false;
+    std::vector<ampforge::PluginParamInfo::ScalePoint> scalePoints;
+    bool isEnumeration = false;
 };
 static SlotMacroParamInfo sSlotMacroParams[kPluginSlotCount][kPluginMacroCount];
 
@@ -1661,10 +1663,29 @@ protected:
                     const int m = sub - 6;
                     if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
                     {
+                        const auto& info = sSlotMacroParams[s][m];
+                        float realVal = info.minVal + newValue * (info.maxVal - info.minVal);
+                        if (!info.scalePoints.empty())
+                        {
+                            float bestVal = realVal;
+                            float bestDiff = 1e9f;
+                            for (const auto& sp : info.scalePoints)
+                            {
+                                float diff = std::abs(sp.value - realVal);
+                                if (diff < bestDiff)
+                                {
+                                    bestDiff = diff;
+                                    bestVal = sp.value;
+                                }
+                            }
+                            realVal = bestVal;
+                            const float snappedNorm = (info.maxVal > info.minVal) ? std::clamp((realVal - info.minVal) / (info.maxVal - info.minVal), 0.0f, 1.0f) : 0.0f;
+                            setParameterValue(knob.paramIndex, snappedNorm);
+                            paramValues[knob.paramIndex] = snappedNorm;
+                            displayValues[knob.paramIndex] = snappedNorm;
+                        }
                         if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == s)
                         {
-                            const auto& info = sSlotMacroParams[s][m];
-                            const float realVal = info.minVal + newValue * (info.maxVal - info.minVal);
                             pluginParamsModal.updateParamValue(info.paramId, realVal);
                         }
                     }
@@ -2064,15 +2085,42 @@ private:
             }
 
             std::vector<uint32_t> chosen;
+
+            if (hp->isModPlugin())
+            {
+                const auto modPorts = hp->getModguiPortSymbols();
+                for (const auto& sym : modPorts)
+                {
+                    if (chosen.size() >= 4) break;
+                    for (uint32_t i = 0; i < paramCount; ++i)
+                    {
+                        ampforge::PluginParamInfo info = hp->getParameterInfo(i);
+                        if (info.symbol == sym)
+                        {
+                            std::string lower = info.name;
+                            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                            if (lower.find("bypass") == std::string::npos && lower.find("enable") == std::string::npos)
+                            {
+                                if (std::find(chosen.begin(), chosen.end(), info.id) == chosen.end())
+                                    chosen.push_back(info.id);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
             for (uint32_t id : candidates)
             {
                 if (chosen.size() >= 4) break;
-                chosen.push_back(id);
+                if (std::find(chosen.begin(), chosen.end(), id) == chosen.end())
+                    chosen.push_back(id);
             }
             for (uint32_t id : fallback)
             {
                 if (chosen.size() >= 4) break;
-                chosen.push_back(id);
+                if (std::find(chosen.begin(), chosen.end(), id) == chosen.end())
+                    chosen.push_back(id);
             }
 
             std::string autoMap;
@@ -2125,6 +2173,8 @@ private:
                         sSlotMacroParams[slot][m].decimals = info.isInteger ? 0 : ((info.maxValue - info.minValue > 10.0f) ? 1 : 2);
                         sSlotMacroParams[slot][m].paramId = pid;
                         sSlotMacroParams[slot][m].mapped = true;
+                        sSlotMacroParams[slot][m].scalePoints = info.scalePoints;
+                        sSlotMacroParams[slot][m].isEnumeration = info.isEnumeration;
 
                         if (m < 4 && 3 + m < static_cast<int>(kPedalDefs[pedalIdx].knobs.size()))
                         {
@@ -4315,6 +4365,25 @@ private:
                 {
                     const auto& info = sSlotMacroParams[s][m];
                     const float realVal = info.minVal + value * (info.maxVal - info.minVal);
+                    if (!info.scalePoints.empty())
+                    {
+                        std::string spLabel;
+                        float minDiff = 1e9f;
+                        for (const auto& sp : info.scalePoints)
+                        {
+                            float diff = std::abs(sp.value - realVal);
+                            if (diff < minDiff)
+                            {
+                                minDiff = diff;
+                                spLabel = sp.label;
+                            }
+                        }
+                        if (!spLabel.empty())
+                        {
+                            std::snprintf(buf, bufSize, "%s", spLabel.c_str());
+                            return;
+                        }
+                    }
                     std::snprintf(buf, bufSize, "%.*f%s%s", info.decimals, realVal, info.unit.empty() ? "" : " ", info.unit.c_str());
                     return;
                 }
@@ -6947,15 +7016,46 @@ private:
             textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
             textLetterSpacing(0.3f);
             std::string cardTitle = def.name;
+            bool isModCard = false;
             if (def.isExternalPlugin)
             {
                 if (def.isBuiltinPlugin)
                     cardTitle = def.name;
                 else if (def.pluginSlotIndex >= 0 && !slotPluginNames[def.pluginSlotIndex].empty())
                     cardTitle = std::string(def.name) + ": " + slotPluginNames[def.pluginSlotIndex];
+
+                if (def.pluginSlotIndex >= 0)
+                {
+                    if (auto* provider = getProvider())
+                    {
+                        if (auto* hp = provider->getHostedPlugin(def.pluginSlotIndex))
+                        {
+                            isModCard = hp->isModPlugin();
+                        }
+                    }
+                }
             }
             text(kModuleLeft + 44.0f, drawY + kModuleHeaderH * 0.5f, cardTitle.c_str(), nullptr);
             textLetterSpacing(0.0f);
+
+            if (isModCard)
+            {
+                const float titleWidth = static_cast<float>(cardTitle.length()) * 8.5f + 10.0f;
+                const float modBadgeX = kModuleLeft + 44.0f + titleWidth + 6.0f;
+                const float modBadgeY = drawY + (kModuleHeaderH - 16.0f) * 0.5f;
+                beginPath();
+                roundedRect(modBadgeX, modBadgeY, 34.0f, 16.0f, 3.0f);
+                fillColor(Color(0, 210, 106, 0.25f * alpha));
+                strokeColor(Color(0, 230, 120, 0.7f * alpha));
+                strokeWidth(1.0f);
+                fill();
+                stroke();
+                closePath();
+                fontSize(9.0f);
+                fillColor(Color(0, 230, 120, alpha));
+                textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                text(modBadgeX + 17.0f, modBadgeY + 8.0f, "MOD", nullptr);
+            }
 
             {
                 // A neutral dark chip rather than a permanently red one - a

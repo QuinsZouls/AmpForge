@@ -57,6 +57,9 @@ std::vector<std::string> PluginScanner::getLv2Paths() const {
     parseEnvPaths("LV2_PATH", paths);
     const std::string home = getUserHome();
     paths.push_back(home + "/.lv2");
+    paths.push_back(home + "/.mod-devices/plugins");
+    paths.push_back("/var/modep/lv2");
+    paths.push_back("/data/plugins");
     paths.push_back("/usr/local/lib/lv2");
     paths.push_back("/usr/local/lib64/lv2");
     paths.push_back("/usr/lib/lv2");
@@ -271,6 +274,17 @@ std::vector<PluginDescriptor> PluginScanner::scanPluginFile(const std::string& p
                         syms.node_free(outClass);
 
                         if (desc.numAudioInputs > 0 && desc.numAudioOutputs > 0) {
+                            auto lv2 = std::make_unique<Lv2Plugin>();
+                            if (lv2->load(uri, path)) {
+                                desc.hasCustomUI = lv2->hasCustomUI();
+                                desc.isMod = lv2->isModPlugin();
+                                desc.modBrand = lv2->getModBrand();
+                                desc.modLabel = lv2->getModLabel();
+                                desc.modModel = lv2->getModModel();
+                                desc.modScreenshot = lv2->getModScreenshotPath();
+                                desc.modThumbnail = lv2->getModThumbnailPath();
+                                desc.modguiPortSymbols = lv2->getModguiPortSymbols();
+                            }
                             results.push_back(desc);
                         }
                     }
@@ -351,6 +365,17 @@ bool PluginScanner::loadCache() {
             entry.desc.numAudioInputs = item.value("audioIn", 0);
             entry.desc.numAudioOutputs = item.value("audioOut", 0);
             entry.desc.hasCustomUI = item.value("hasCustomUI", false);
+            entry.desc.isMod = item.value("isMod", false);
+            entry.desc.modBrand = item.value("modBrand", "");
+            entry.desc.modLabel = item.value("modLabel", "");
+            entry.desc.modModel = item.value("modModel", "");
+            entry.desc.modScreenshot = item.value("modScreenshot", "");
+            entry.desc.modThumbnail = item.value("modThumbnail", "");
+            if (item.contains("modguiPorts") && item["modguiPorts"].is_array()) {
+                for (const auto& p : item["modguiPorts"]) {
+                    if (p.is_string()) entry.desc.modguiPortSymbols.push_back(p.get<std::string>());
+                }
+            }
 
             std::string fmtStr = item.value("format", "Unknown");
             if (fmtStr == "LV2") entry.desc.format = PluginFormat::LV2;
@@ -386,6 +411,13 @@ bool PluginScanner::saveCache() {
         item["audioIn"] = entry.desc.numAudioInputs;
         item["audioOut"] = entry.desc.numAudioOutputs;
         item["hasCustomUI"] = entry.desc.hasCustomUI;
+        item["isMod"] = entry.desc.isMod;
+        if (!entry.desc.modBrand.empty()) item["modBrand"] = entry.desc.modBrand;
+        if (!entry.desc.modLabel.empty()) item["modLabel"] = entry.desc.modLabel;
+        if (!entry.desc.modModel.empty()) item["modModel"] = entry.desc.modModel;
+        if (!entry.desc.modScreenshot.empty()) item["modScreenshot"] = entry.desc.modScreenshot;
+        if (!entry.desc.modThumbnail.empty()) item["modThumbnail"] = entry.desc.modThumbnail;
+        if (!entry.desc.modguiPortSymbols.empty()) item["modguiPorts"] = entry.desc.modguiPortSymbols;
         root.push_back(item);
     }
 

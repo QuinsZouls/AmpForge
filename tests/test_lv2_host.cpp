@@ -3,6 +3,7 @@
 #include "PluginNodeBlock.hpp"
 #include <cmath>
 #include <vector>
+#include <filesystem>
 
 #ifndef TEST_LV2_BUNDLE_DIR
 # define TEST_LV2_BUNDLE_DIR "./test_gain.lv2/"
@@ -76,4 +77,54 @@ AMPFORGE_TEST(lv2_loader_and_gain_plugin_test)
     CHECK(lv2NoSlash->load("", noSlash));
     CHECK(lv2NoSlash->getName() == "AmpForge Test Gain");
     CHECK(lv2NoSlash->getParameterCount() == 1);
+}
+
+AMPFORGE_TEST(mod_devices_metadata_and_scale_points)
+{
+    auto& loader = ampforge::LilvLoader::instance();
+    if (!loader.isAvailable()) return;
+
+    // Test with real MOD plugin if available
+    const std::string modPath = "/home/alfredo/Downloads/fuzz.lv2";
+    std::error_code ec;
+    if (std::filesystem::is_directory(modPath, ec)) {
+        auto lv2 = std::make_unique<ampforge::Lv2Plugin>();
+        bool loaded = lv2->load("https://rpowell5064.github.io/guitaramp-suite/fuzz", modPath);
+        CHECK(loaded);
+        if (loaded) {
+            CHECK(lv2->isModPlugin());
+            CHECK(lv2->getModBrand() == "Hex Chain");
+            CHECK(lv2->getModLabel() == "Fuzz");
+            CHECK(!lv2->getModScreenshotPath().empty());
+            CHECK(lv2->getModScreenshotPath().find("screenshot-fuzz.png") != std::string::npos);
+
+            const auto modPorts = lv2->getModguiPortSymbols();
+            CHECK(!modPorts.empty());
+            CHECK(modPorts[0] == "pedal");
+            CHECK(modPorts[1] == "mode");
+
+            // Verify scale points for enumerated ports
+            bool foundPedal = false;
+            bool foundVariant = false;
+            const uint32_t count = lv2->getParameterCount();
+            for (uint32_t i = 0; i < count; ++i) {
+                auto info = lv2->getParameterInfo(i);
+                if (info.symbol == "pedal") {
+                    foundPedal = true;
+                    CHECK(info.isEnumeration);
+                    CHECK(info.scalePoints.size() == 4);
+                    CHECK(info.scalePoints[0].label == "Italian Hero");
+                    CHECK(info.scalePoints[1].label == "I Know It");
+                    CHECK(info.scalePoints[2].label == "Octavius");
+                    CHECK(info.scalePoints[3].label == "Fuzz Zachary");
+                } else if (info.symbol == "mode") {
+                    foundVariant = true;
+                    CHECK(info.isEnumeration);
+                    CHECK(info.scalePoints.size() == 6);
+                }
+            }
+            CHECK(foundPedal);
+            CHECK(foundVariant);
+        }
+    }
 }
