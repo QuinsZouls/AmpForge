@@ -663,7 +663,7 @@ static const char* const kNamModelStateKey = "nam_model_path";
 // delivered it, so on the two most commonly used formats the status
 // sidebar never heard about a successful load, and a failed one never got
 // a toast. Both are now derived entirely client-side in ChainUI.cpp
-// (see readNamArchitecture()) by reading the .nam file directly off of
+// (see readNamFileInfo()) by reading the .nam file directly off of
 // the path in kNamModelStateKey below - a path ChainUI always has
 // correctly, on every format, since DPF's file-browser glue echoes it to
 // the UI directly rather than through this plugin-initiated push.
