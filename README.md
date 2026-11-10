@@ -610,7 +610,10 @@ Known gaps, tracked for future work:
   cross-compile needed there, unlike Windows) and attaches
   `AmpForge-<version>-macos.zip` the same way, so pushing a tag now
   publishes all three platforms with no manual packaging step on any of
-  them.
+  them. Only the Linux workflow runs on pull requests, though: the macOS
+  and Windows ones run on pushes to `main` and on tags, so a PR doesn't
+  wait on a macOS runner or on the mingw-w64/Wine cross-compile (either
+  can still be started by hand via `workflow_dispatch`).
 - The macOS build isn't code-signed or notarized (that needs a paid
   Apple Developer account this project doesn't have) - see
   [Download](#download) above for the Gatekeeper workaround this makes
