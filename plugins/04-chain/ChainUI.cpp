@@ -20,6 +20,7 @@
  *     away instantly (mirrors the existing add-in animation).
  */
 
+#include "DistrhoPlugin.hpp"
 #include "DistrhoUI.hpp"
 #include "ChainParameters.hpp"
 #include "ChainPresets.hpp"
@@ -27,6 +28,10 @@
 #include "AmpBlock.hpp"
 #include "AutotuneBlock.hpp"
 #include "Biquad.hpp"
+#include "PluginBrowserModal.hpp"
+#include "PluginParamsModal.hpp"
+#include "host/HostedPluginProvider.hpp"
+#include "host/PluginConfig.hpp"
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -246,6 +251,7 @@ enum class StompIcon
     Doubler,
     Harmonizer,
     Exciter,
+    Plugin,
 };
 
 struct PedalDef
@@ -288,10 +294,13 @@ struct PedalDef
     // so it doesn't fit the shared KnobDef shape above at all. Currently
     // just the EQ pedal. Trailing field, same reasoning as isVocal above.
     bool hasEqCurve = false;
+    bool isExternalPlugin = false;
+    int pluginSlotIndex = -1;
+    bool isBuiltinPlugin = false;
 };
 
 // clang-format off
-static const PedalDef kPedalDefs[] =
+static PedalDef kPedalDefs[] =
 {
     { "Noise Gate", kParamGateOn,     kParamGateBypass,     kParamGatePosition,  0, Color(130, 150, 210), {
         { "Thresh",  kParamGateThreshold, -80.0f, 0.0f,    "dB", 1, false },
@@ -408,6 +417,78 @@ static const PedalDef kPedalDefs[] =
         { "Freq",   kParamExciterFrequency, 1500.0f, 14000.0f, "Hz", 0, false },
         { "Amount", kParamExciterAmount,       0.0f,     1.0f, "",   0, true },
     }, false, nullptr, StompShape::Mini, StompIcon::Exciter, "Load File...", true },
+    { "Plugin", kParamPlugin1On, kParamPlugin1Bypass, kParamPlugin1Position, 19, Color(100, 190, 220), {
+        { "In",  kParamPlugin1InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin1Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin1OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin1Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin1Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin1Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin1Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 0 },
+    { "Built-in 1", kParamPlugin2On, kParamPlugin2Bypass, kParamPlugin2Position, 20, Color(120, 210, 180), {
+        { "In",  kParamPlugin2InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin2Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin2OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin2Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin2Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin2Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin2Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 1 },
+    { "Built-in 2", kParamPlugin3On, kParamPlugin3Bypass, kParamPlugin3Position, 21, Color(220, 180, 120), {
+        { "In",  kParamPlugin3InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin3Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin3OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin3Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin3Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin3Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin3Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 2 },
+    { "Built-in 3", kParamPlugin4On, kParamPlugin4Bypass, kParamPlugin4Position, 22, Color(200, 140, 220), {
+        { "In",  kParamPlugin4InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin4Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin4OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin4Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin4Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin4Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin4Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 3 },
+    { "Built-in 4", kParamPlugin5On, kParamPlugin5Bypass, kParamPlugin5Position, 23, Color(240, 130, 140), {
+        { "In",  kParamPlugin5InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin5Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin5OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin5Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin5Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin5Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin5Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 4 },
+    { "Built-in 5", kParamPlugin6On, kParamPlugin6Bypass, kParamPlugin6Position, 24, Color(130, 200, 240), {
+        { "In",  kParamPlugin6InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin6Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin6OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin6Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin6Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin6Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin6Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 5 },
+    { "Built-in 6", kParamPlugin7On, kParamPlugin7Bypass, kParamPlugin7Position, 25, Color(210, 220, 120), {
+        { "In",  kParamPlugin7InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin7Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin7OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin7Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin7Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin7Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin7Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 6 },
+    { "Built-in 7", kParamPlugin8On, kParamPlugin8Bypass, kParamPlugin8Position, 26, Color(170, 140, 230), {
+        { "In",  kParamPlugin8InTrim,  -24.0f, 24.0f, "dB", 1, false },
+        { "Mix", kParamPlugin8Mix,       0.0f,  1.0f, "",   0, true },
+        { "Out", kParamPlugin8OutTrim, -24.0f, 24.0f, "dB", 1, false },
+        { "M1",  kParamPlugin8Macro1,    0.0f,  1.0f, "",   0, true },
+        { "M2",  kParamPlugin8Macro2,    0.0f,  1.0f, "",   0, true },
+        { "M3",  kParamPlugin8Macro3,    0.0f,  1.0f, "",   0, true },
+        { "M4",  kParamPlugin8Macro4,    0.0f,  1.0f, "",   0, true },
+    }, false, nullptr, StompShape::Wide, StompIcon::Plugin, "Load Plugin...", false, false, true, 7 },
 };
 // clang-format on
 static constexpr int kPedalDefCount = sizeof(kPedalDefs) / sizeof(kPedalDefs[0]);
@@ -478,11 +559,39 @@ static constexpr float kPaletteHeaderH = 24.0f;
 // array to keep existing indices stable, see PedalDef's comment above),
 // then a "VOCAL" header and the vocal-only pedals (currently just
 // Autotune - see PedalDef::isVocal) the same way.
-static const std::vector<PaletteRow> kPaletteRows = []()
+static std::vector<PaletteRow> sPaletteRows;
+static std::string sBuiltinPluginNames[kPluginSlotCount];
+
+struct SlotMacroParamInfo {
+    std::string name;
+    std::string unit;
+    float minVal = 0.0f;
+    float maxVal = 1.0f;
+    float defVal = 0.0f;
+    int decimals = 1;
+    uint32_t paramId = 0xFFFFFFFF;
+    bool mapped = false;
+    std::vector<ampforge::PluginParamInfo::ScalePoint> scalePoints;
+    bool isEnumeration = false;
+};
+static SlotMacroParamInfo sSlotMacroParams[kPluginSlotCount][kPluginMacroCount];
+
+static void rebuildPaletteRows()
 {
-    std::vector<int> guitarIdx, vocalIdx;
+    std::vector<int> guitarIdx, vocalIdx, pluginIdx;
     for (int i = 0; i < kPedalDefCount; ++i)
-        (kPedalDefs[i].isVocal ? vocalIdx : guitarIdx).push_back(i);
+    {
+        if (kPedalDefs[i].isExternalPlugin)
+        {
+            // Only include generic Plugin node (slot 0) or configured built-in plugins (slot > 0)
+            if (kPedalDefs[i].pluginSlotIndex == 0 || kPedalDefs[i].isBuiltinPlugin)
+                pluginIdx.push_back(i);
+        }
+        else if (kPedalDefs[i].isVocal)
+            vocalIdx.push_back(i);
+        else
+            guitarIdx.push_back(i);
+    }
 
     const auto byDefaultPosition = [](int a, int b)
     {
@@ -490,26 +599,41 @@ static const std::vector<PaletteRow> kPaletteRows = []()
     };
     std::sort(guitarIdx.begin(), guitarIdx.end(), byDefaultPosition);
     std::sort(vocalIdx.begin(), vocalIdx.end(), byDefaultPosition);
+    std::sort(pluginIdx.begin(), pluginIdx.end(), byDefaultPosition);
 
-    std::vector<PaletteRow> rows;
+    sPaletteRows.clear();
     float y = kRackTop;
     for (int i : guitarIdx)
     {
-        rows.push_back({ false, nullptr, i, y, kPaletteItemH });
+        sPaletteRows.push_back({ false, nullptr, i, y, kPaletteItemH });
         y += kPaletteItemH;
     }
-    if (!vocalIdx.empty())
+    if (!pluginIdx.empty())
     {
-        rows.push_back({ true, "VOCAL", -1, y, kPaletteHeaderH });
+        sPaletteRows.push_back({ true, "PLUGINS", -1, y, kPaletteHeaderH });
         y += kPaletteHeaderH;
-        for (int i : vocalIdx)
+        for (int i : pluginIdx)
         {
-            rows.push_back({ false, nullptr, i, y, kPaletteItemH });
+            sPaletteRows.push_back({ false, nullptr, i, y, kPaletteItemH });
             y += kPaletteItemH;
         }
     }
-    return rows;
-}();
+    if (!vocalIdx.empty())
+    {
+        sPaletteRows.push_back({ true, "VOCAL", -1, y, kPaletteHeaderH });
+        y += kPaletteHeaderH;
+        for (int i : vocalIdx)
+        {
+            sPaletteRows.push_back({ false, nullptr, i, y, kPaletteItemH });
+            y += kPaletteItemH;
+        }
+    }
+}
+
+static struct PaletteInit
+{
+    PaletteInit() { rebuildPaletteRows(); }
+} sPaletteInit;
 
 // A blank starting point for "+ New Preset" - only Amp present, flat
 // and neutral, everything else off the board.
@@ -543,6 +667,14 @@ static const float kBlankPresetValues[kParamCount] =
     /* Doubler on,pos,delay,depth,mix,bypass */ 0.0f, 10.0f, 20.0f, 4.0f, 0.4f, 0.0f,
     /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
     /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
+    /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
 };
 // clang-format on
 
@@ -550,6 +682,7 @@ struct CustomPreset
 {
     std::string name;
     float values[kParamCount];
+    std::map<std::string, std::string> states;
 };
 
 class ChainUI : public UI
@@ -571,6 +704,114 @@ public:
         loadCustomPresets();
         loadFactoryOverrides();
         loadHiddenFactoryPresets();
+
+        // Wire plugin modals
+        pluginBrowserModal.onPluginSelected = [this](int slot, const ampforge::PluginDescriptor& desc) {
+            if (slot < 0 || slot >= kPluginSlotCount)
+                return;
+            slotPluginNames[slot] = desc.name;
+            const char* fmtStr = ampforge::formatToString(desc.format);
+            setState(kPluginFormatStateKeys[slot], fmtStr);
+            setState(kPluginIdStateKeys[slot], desc.id.c_str());
+            setState(kPluginPathStateKeys[slot], desc.path.c_str());
+            stateValues[kPluginFormatStateKeys[slot]] = fmtStr;
+            stateValues[kPluginIdStateKeys[slot]] = desc.id;
+            stateValues[kPluginPathStateKeys[slot]] = desc.path;
+
+            // Turn pedal ON if off
+            for (int i = 0; i < kPedalDefCount; ++i)
+            {
+                if (kPedalDefs[i].isExternalPlugin && kPedalDefs[i].pluginSlotIndex == slot)
+                {
+                    const int onParam = kPedalDefs[i].onParam;
+                    if (onParam >= 0 && paramValues[onParam] < 0.5f)
+                    {
+                        editParameter(onParam, true);
+                        setParameterValue(onParam, 1.0f);
+                        paramValues[onParam] = 1.0f;
+                        editParameter(onParam, false);
+                    }
+                    break;
+                }
+            }
+            triggerSaveToast("Loaded plugin: " + desc.name);
+            syncSlotPlugin(slot, true);
+            repaint();
+        };
+
+        pluginBrowserModal.onBrowseFilesystem = [this](int slot) {
+            activeFilePickSlot = slot;
+            requestStateFile(kPluginSelectFileStateKey);
+        };
+
+        pluginBrowserModal.onImportToConfig = [this](const ampforge::PluginDescriptor& desc) {
+            if (ampforge::PluginConfig::isBuiltinPlugin(desc.path, desc.id))
+            {
+                ampforge::PluginConfig::removeBuiltinPlugin(!desc.id.empty() ? desc.id : desc.path);
+                reloadBuiltinPlugins();
+                triggerSaveToast("Removed '" + desc.name + "' from built-in plugins");
+            }
+            else
+            {
+                ampforge::BuiltinPluginConfig cfg;
+                cfg.name = desc.name;
+                cfg.path = desc.path;
+                cfg.id = desc.id;
+                cfg.format = ampforge::formatToString(desc.format);
+                ampforge::PluginConfig::addBuiltinPlugin(cfg);
+                reloadBuiltinPlugins();
+                triggerSaveToast("Added '" + desc.name + "' as built-in plugin");
+            }
+            repaint();
+        };
+
+        pluginBrowserModal.isBuiltinCheck = [](const std::string& path, const std::string& id) {
+            return ampforge::PluginConfig::isBuiltinPlugin(path, id);
+        };
+
+        pluginParamsModal.onParamChanged = [this](int slot, uint32_t paramId, float value) {
+            if (auto* provider = getProvider())
+                provider->enqueuePluginParam(slot, paramId, value);
+
+            for (int m = 0; m < kPluginMacroCount; ++m)
+            {
+                if (sSlotMacroParams[slot][m].mapped && sSlotMacroParams[slot][m].paramId == paramId)
+                {
+                    const auto& info = sSlotMacroParams[slot][m];
+                    const float norm = (info.maxVal > info.minVal) ? std::clamp((value - info.minVal) / (info.maxVal - info.minVal), 0.0f, 1.0f) : 0.0f;
+                    const int macroParam = kParamPlugin1Macro1 + slot * 14 + m;
+                    editParameter(macroParam, true);
+                    setParameterValue(macroParam, norm);
+                    paramValues[macroParam] = norm;
+                    displayValues[macroParam] = norm;
+                    editParameter(macroParam, false);
+                    break;
+                }
+            }
+        };
+
+        pluginParamsModal.onMappingChanged = [this](int slot, int /*macroIdx*/, uint32_t /*paramId*/) {
+            if (slot < 0 || slot >= kPluginSlotCount)
+                return;
+            const std::string mapStr = pluginParamsModal.buildMappingString();
+            setState(kPluginMapStateKeys[slot], mapStr.c_str());
+            stateValues[kPluginMapStateKeys[slot]] = mapStr;
+            syncSlotPlugin(slot, false);
+        };
+
+        reloadBuiltinPlugins();
+    }
+
+    ~ChainUI() override
+    {
+        if (auto* provider = getProvider())
+        {
+            for (int s = 0; s < kPluginSlotCount; ++s)
+            {
+                if (auto* hp = provider->getHostedPlugin(s))
+                    hp->closeUI();
+            }
+        }
     }
 
 protected:
@@ -728,6 +969,23 @@ protected:
 
         if (anyChanged)
             repaint();
+
+        if (auto* provider = getProvider())
+        {
+            for (int s = 0; s < kPluginSlotCount; ++s)
+            {
+                if (auto* hp = provider->getHostedPlugin(s))
+                {
+                    if (hp->isUIOpen())
+                        hp->idleUI();
+
+                    if (!slotPluginNames[s].empty() && !sSlotMacroParams[s][0].mapped && hp->getParameterCount() > 0)
+                    {
+                        syncSlotPlugin(s, false);
+                    }
+                }
+            }
+        }
     }
 
     void onNanoDisplay() override
@@ -752,10 +1010,22 @@ protected:
         drawSaveModal(width, height);
         drawAudioSettings(width, height);
         drawTunerOverlay(width, height);
+
+        if (pluginBrowserModal.isOpen())
+            pluginBrowserModal.draw(this, width, height);
+        if (pluginParamsModal.isOpen())
+            pluginParamsModal.draw(this, width, height);
     }
 
     bool onCharacterInput(const CharacterInputEvent& ev) override
     {
+        if (pluginBrowserModal.isOpen())
+        {
+            pluginBrowserModal.onCharacterInput(ev);
+            repaint();
+            return true;
+        }
+
         if (savingPreset)
         {
             // Control characters (Backspace, Delete, Enter, Escape, Tab...)
@@ -835,6 +1105,20 @@ protected:
 
     bool onKeyboard(const KeyboardEvent& ev) override
     {
+        if (pluginBrowserModal.isOpen())
+        {
+            pluginBrowserModal.onKeyboard(ev);
+            repaint();
+            return true;
+        }
+
+        if (pluginParamsModal.isOpen())
+        {
+            pluginParamsModal.onKeyboard(ev);
+            repaint();
+            return true;
+        }
+
         if (paramValues[kParamTunerOn] > 0.5f)
         {
             if (ev.press && ev.key == kKeyEscape)
@@ -911,6 +1195,20 @@ protected:
 
     bool onMouse(const MouseEvent& ev) override
     {
+        if (pluginBrowserModal.isOpen())
+        {
+            pluginBrowserModal.onMouse(ev);
+            repaint();
+            return true;
+        }
+
+        if (pluginParamsModal.isOpen())
+        {
+            pluginParamsModal.onMouse(ev);
+            repaint();
+            return true;
+        }
+
         const float mx = static_cast<float>(ev.pos.getX());
         const float my = static_cast<float>(ev.pos.getY());
 
@@ -1028,7 +1326,7 @@ protected:
         // --- Palette: press-and-hold starts a potential drag ---
         if (mx < kPaletteWidth && my > kTopBarHeight + kControlBarHeight)
         {
-            for (const PaletteRow& row : kPaletteRows)
+            for (const PaletteRow& row : sPaletteRows)
             {
                 const float itemY = row.y + paletteScrollOffset;
                 if (row.isHeader || my < itemY || my >= itemY + row.height)
@@ -1122,6 +1420,95 @@ protected:
                     return true;
                 }
 
+                if (def.isExternalPlugin)
+                {
+                    float gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih;
+                    pluginHeaderButtonsRect(kModuleLeft, y, moduleW, gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih);
+                    const int slot = def.pluginSlotIndex;
+                    const bool hasPlugin = (slot >= 0 && !slotPluginNames[slot].empty());
+
+                    if (hasPlugin && mx >= gx && mx <= gx + gw && my >= gy && my <= gy + gh)
+                    {
+                        ampforge::HostedPlugin* hp = nullptr;
+                        if (auto* provider = getProvider())
+                            hp = provider->getHostedPlugin(slot);
+                        if (hp && hp->hasCustomUI())
+                        {
+                            if (hp->isUIOpen())
+                                hp->closeUI();
+                            else
+                                hp->openUI(getWindow().getNativeWindowHandle());
+                        }
+                        else
+                        {
+                            if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot)
+                            {
+                                pluginParamsModal.close();
+                            }
+                            else
+                            {
+                                const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
+                                const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
+                                const std::string fmtStr = stateValues[kPluginFormatStateKeys[slot]];
+                                pluginParamsModal.open(slot, hp, name, mappingStr, fmtStr);
+                            }
+                        }
+                        repaint();
+                        return true;
+                    }
+                    if (hasPlugin && mx >= px && mx <= px + pw && my >= py && my <= py + ph)
+                    {
+                        if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot)
+                        {
+                            pluginParamsModal.close();
+                        }
+                        else
+                        {
+                            ampforge::HostedPlugin* hp = nullptr;
+                            if (auto* provider = getProvider())
+                                hp = provider->getHostedPlugin(slot);
+                            const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
+                            const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
+                            const std::string fmtStr = stateValues[kPluginFormatStateKeys[slot]];
+                            pluginParamsModal.open(slot, hp, name, mappingStr, fmtStr);
+                        }
+                        repaint();
+                        return true;
+                    }
+                    if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh)
+                    {
+                        pluginBrowserModal.open(slot);
+                        repaint();
+                        return true;
+                    }
+                    if (hasPlugin && mx >= ix && mx <= ix + iw && my >= iy && my <= iy + ih)
+                    {
+                        const std::string& path = stateValues[kPluginPathStateKeys[slot]];
+                        const std::string& id = stateValues[kPluginIdStateKeys[slot]];
+                        const std::string& name = slotPluginNames[slot];
+                        const std::string& format = stateValues[kPluginFormatStateKeys[slot]];
+                        if (ampforge::PluginConfig::isBuiltinPlugin(path, id))
+                        {
+                            ampforge::PluginConfig::removeBuiltinPlugin(!id.empty() ? id : path);
+                            reloadBuiltinPlugins();
+                            triggerSaveToast("Removed '" + name + "' from built-in plugins");
+                        }
+                        else
+                        {
+                            ampforge::BuiltinPluginConfig cfg;
+                            cfg.name = name;
+                            cfg.path = path;
+                            cfg.id = id;
+                            cfg.format = format;
+                            ampforge::PluginConfig::addBuiltinPlugin(cfg);
+                            reloadBuiltinPlugins();
+                            triggerSaveToast("Added '" + name + "' as built-in plugin");
+                        }
+                        repaint();
+                        return true;
+                    }
+                }
+
                 if (def.hasEqCurve)
                 {
                     // Same graph rect drawEqCurve() draws into - see its
@@ -1209,6 +1596,20 @@ protected:
 
     bool onMotion(const MotionEvent& ev) override
     {
+        if (pluginBrowserModal.isOpen())
+        {
+            pluginBrowserModal.onMotion(ev);
+            repaint();
+            return true;
+        }
+
+        if (pluginParamsModal.isOpen())
+        {
+            pluginParamsModal.onMotion(ev);
+            repaint();
+            return true;
+        }
+
         const float mx = static_cast<float>(ev.pos.getX());
         const float my = static_cast<float>(ev.pos.getY());
         lastMouseX = mx;
@@ -1252,6 +1653,45 @@ protected:
             setParameterValue(knob.paramIndex, newValue);
             paramValues[knob.paramIndex] = newValue;
             displayValues[knob.paramIndex] = newValue;
+
+            if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+            {
+                const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+                const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+                if (sub >= 6)
+                {
+                    const int m = sub - 6;
+                    if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                    {
+                        const auto& info = sSlotMacroParams[s][m];
+                        float realVal = info.minVal + newValue * (info.maxVal - info.minVal);
+                        if (!info.scalePoints.empty())
+                        {
+                            float bestVal = realVal;
+                            float bestDiff = 1e9f;
+                            for (const auto& sp : info.scalePoints)
+                            {
+                                float diff = std::abs(sp.value - realVal);
+                                if (diff < bestDiff)
+                                {
+                                    bestDiff = diff;
+                                    bestVal = sp.value;
+                                }
+                            }
+                            realVal = bestVal;
+                            const float snappedNorm = (info.maxVal > info.minVal) ? std::clamp((realVal - info.minVal) / (info.maxVal - info.minVal), 0.0f, 1.0f) : 0.0f;
+                            setParameterValue(knob.paramIndex, snappedNorm);
+                            paramValues[knob.paramIndex] = snappedNorm;
+                            displayValues[knob.paramIndex] = snappedNorm;
+                        }
+                        if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == s)
+                        {
+                            pluginParamsModal.updateParamValue(info.paramId, realVal);
+                        }
+                    }
+                }
+            }
+
             repaint();
             return true;
         }
@@ -1359,6 +1799,20 @@ protected:
 
     bool onScroll(const ScrollEvent& ev) override
     {
+        if (pluginBrowserModal.isOpen())
+        {
+            pluginBrowserModal.onScroll(ev);
+            repaint();
+            return true;
+        }
+
+        if (pluginParamsModal.isOpen())
+        {
+            pluginParamsModal.onScroll(ev);
+            repaint();
+            return true;
+        }
+
         // The wheel is the one input the full-screen overlays used to leak:
         // their key and click handlers swallow everything, but an ungated
         // onScroll() scrolled the rack/palette *behind* the scrim. With the
@@ -1438,10 +1892,316 @@ protected:
                     + " (unreadable, or not a valid .nam file)");
         }
 
+        if (std::strcmp(key, kPluginSelectFileStateKey) == 0 && value[0] != '\0')
+        {
+            std::string pickedPath = value;
+            std::error_code ec;
+            std::filesystem::path pp(pickedPath);
+            if (pp.extension() == ".ttl" || pp.extension() == ".so")
+            {
+                if (pp.parent_path().extension() == ".lv2" || std::filesystem::is_regular_file(pp.parent_path() / "manifest.ttl", ec))
+                {
+                    pickedPath = pp.parent_path().string();
+                }
+            }
+
+            ampforge::PluginScanner scanner;
+            auto descs = scanner.scanPath(pickedPath);
+            ampforge::PluginDescriptor desc;
+            if (!descs.empty())
+            {
+                desc = descs[0];
+            }
+            else
+            {
+                const std::filesystem::path p(pickedPath);
+                desc.path = pickedPath;
+                desc.name = p.stem().string();
+                desc.id = p.stem().string();
+                const std::string ext = p.extension().string();
+                if (ext == ".vst3") desc.format = ampforge::PluginFormat::VST3;
+                else if (ext == ".clap") desc.format = ampforge::PluginFormat::CLAP;
+                else if (ext == ".lv2" || ext == ".ttl" || ext == ".so") desc.format = ampforge::PluginFormat::LV2;
+                else desc.format = ampforge::PluginFormat::VST3;
+            }
+
+            const int slot = activeFilePickSlot;
+            if (slot >= 0 && slot < kPluginSlotCount)
+            {
+                slotPluginNames[slot] = desc.name;
+                const char* fmtStr = ampforge::formatToString(desc.format);
+                setState(kPluginFormatStateKeys[slot], fmtStr);
+                setState(kPluginIdStateKeys[slot], desc.id.c_str());
+                setState(kPluginPathStateKeys[slot], desc.path.c_str());
+                stateValues[kPluginFormatStateKeys[slot]] = fmtStr;
+                stateValues[kPluginIdStateKeys[slot]] = desc.id;
+                stateValues[kPluginPathStateKeys[slot]] = desc.path;
+
+                // Turn pedal ON if off
+                for (int i = 0; i < kPedalDefCount; ++i)
+                {
+                    if (kPedalDefs[i].isExternalPlugin && kPedalDefs[i].pluginSlotIndex == slot)
+                    {
+                        const int onParam = kPedalDefs[i].onParam;
+                        if (onParam >= 0 && paramValues[onParam] < 0.5f)
+                        {
+                            editParameter(onParam, true);
+                            setParameterValue(onParam, 1.0f);
+                            paramValues[onParam] = 1.0f;
+                            editParameter(onParam, false);
+                        }
+                        break;
+                    }
+                }
+                triggerSaveToast("Loaded plugin: " + desc.name);
+                syncSlotPlugin(slot, true);
+            }
+        }
+
+        for (int s = 0; s < kPluginSlotCount; ++s)
+        {
+            if (std::strcmp(key, kPluginPathStateKeys[s]) == 0)
+            {
+                if (value[0] != '\0')
+                    slotPluginNames[s] = std::filesystem::path(value).stem().string();
+                else
+                    slotPluginNames[s].clear();
+                syncSlotPlugin(s, false);
+            }
+            if (std::strcmp(key, kPluginMapStateKeys[s]) == 0)
+            {
+                syncSlotPlugin(s, false);
+            }
+        }
+
         repaint();
     }
 
 private:
+    void reloadBuiltinPlugins()
+    {
+        builtinConfigs = ampforge::PluginConfig::loadBuiltinPlugins();
+        const size_t maxBuiltins = static_cast<size_t>(kPluginSlotCount - 1);
+        const size_t count = std::min(builtinConfigs.size(), maxBuiltins);
+
+        for (int s = 1; s < kPluginSlotCount; ++s)
+        {
+            const size_t idx = static_cast<size_t>(s - 1);
+            int pedalIdx = -1;
+            for (int p = 0; p < kPedalDefCount; ++p)
+            {
+                if (kPedalDefs[p].isExternalPlugin && kPedalDefs[p].pluginSlotIndex == s)
+                {
+                    pedalIdx = p;
+                    break;
+                }
+            }
+            if (pedalIdx < 0)
+                continue;
+
+            if (idx < count)
+            {
+                const auto& cfg = builtinConfigs[idx];
+                sBuiltinPluginNames[s] = cfg.name;
+                kPedalDefs[pedalIdx].name = sBuiltinPluginNames[s].c_str();
+                kPedalDefs[pedalIdx].isBuiltinPlugin = true;
+
+                if (slotPluginNames[s].empty())
+                    slotPluginNames[s] = cfg.name;
+
+                if (stateValues[kPluginPathStateKeys[s]].empty() && !cfg.path.empty())
+                {
+                    setState(kPluginFormatStateKeys[s], cfg.format.c_str());
+                    setState(kPluginIdStateKeys[s], cfg.id.c_str());
+                    setState(kPluginPathStateKeys[s], cfg.path.c_str());
+                    stateValues[kPluginFormatStateKeys[s]] = cfg.format;
+                    stateValues[kPluginIdStateKeys[s]] = cfg.id;
+                    stateValues[kPluginPathStateKeys[s]] = cfg.path;
+                }
+            }
+            else
+            {
+                sBuiltinPluginNames[s].clear();
+                kPedalDefs[pedalIdx].isBuiltinPlugin = false;
+            }
+            syncSlotPlugin(s, false);
+        }
+
+        rebuildPaletteRows();
+    }
+
+    void syncSlotPlugin(int slot, bool forceAutoMap)
+    {
+        if (slot < 0 || slot >= kPluginSlotCount)
+            return;
+
+        int pedalIdx = -1;
+        for (int p = 0; p < kPedalDefCount; ++p)
+        {
+            if (kPedalDefs[p].isExternalPlugin && kPedalDefs[p].pluginSlotIndex == slot)
+            {
+                pedalIdx = p;
+                break;
+            }
+        }
+        if (pedalIdx < 0) return;
+
+        ampforge::HostedPlugin* hp = nullptr;
+        if (auto* provider = getProvider())
+            hp = provider->getHostedPlugin(slot);
+
+        if (!hp)
+            return;
+
+        std::string mapStr = stateValues[kPluginMapStateKeys[slot]];
+        const uint32_t paramCount = hp->getParameterCount();
+
+        // If no mapping exists yet or forceAutoMap is true, auto-map the primary parameters
+        if ((mapStr.empty() || forceAutoMap) && paramCount > 0)
+        {
+            std::vector<uint32_t> candidates;
+            std::vector<uint32_t> fallback;
+
+            for (uint32_t i = 0; i < paramCount; ++i)
+            {
+                ampforge::PluginParamInfo info = hp->getParameterInfo(i);
+                std::string lower = info.name;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower.find("bypass") != std::string::npos ||
+                    lower.find("enable") != std::string::npos ||
+                    lower == "enabled")
+                {
+                    continue; // skip bypass / enable
+                }
+
+                if (!info.isBoolean && !info.isInteger)
+                {
+                    candidates.push_back(info.id);
+                }
+                else
+                {
+                    fallback.push_back(info.id);
+                }
+            }
+
+            std::vector<uint32_t> chosen;
+
+            if (hp->isModPlugin())
+            {
+                const auto modPorts = hp->getModguiPortSymbols();
+                for (const auto& sym : modPorts)
+                {
+                    if (chosen.size() >= 4) break;
+                    for (uint32_t i = 0; i < paramCount; ++i)
+                    {
+                        ampforge::PluginParamInfo info = hp->getParameterInfo(i);
+                        if (info.symbol == sym)
+                        {
+                            std::string lower = info.name;
+                            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                            if (lower.find("bypass") == std::string::npos && lower.find("enable") == std::string::npos)
+                            {
+                                if (std::find(chosen.begin(), chosen.end(), info.id) == chosen.end())
+                                    chosen.push_back(info.id);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            for (uint32_t id : candidates)
+            {
+                if (chosen.size() >= 4) break;
+                if (std::find(chosen.begin(), chosen.end(), id) == chosen.end())
+                    chosen.push_back(id);
+            }
+            for (uint32_t id : fallback)
+            {
+                if (chosen.size() >= 4) break;
+                if (std::find(chosen.begin(), chosen.end(), id) == chosen.end())
+                    chosen.push_back(id);
+            }
+
+            std::string autoMap;
+            for (size_t m = 0; m < chosen.size(); ++m)
+            {
+                if (!autoMap.empty()) autoMap += ",";
+                autoMap += std::to_string(m) + ":" + std::to_string(chosen[m]);
+            }
+
+            if (!autoMap.empty())
+            {
+                mapStr = autoMap;
+                setState(kPluginMapStateKeys[slot], mapStr.c_str());
+                stateValues[kPluginMapStateKeys[slot]] = mapStr;
+            }
+        }
+
+        // Reset all macros for this slot
+        for (int m = 0; m < kPluginMacroCount; ++m)
+        {
+            sSlotMacroParams[slot][m] = SlotMacroParamInfo{};
+            if (m < 4 && 3 + m < static_cast<int>(kPedalDefs[pedalIdx].knobs.size()))
+            {
+                static const char* const kDefaultLabels[4] = { "M1", "M2", "M3", "M4" };
+                kPedalDefs[pedalIdx].knobs[3 + m].label = kDefaultLabels[m];
+                kPedalDefs[pedalIdx].knobs[3 + m].unit = "";
+            }
+        }
+
+        // Parse mapping and populate knob metadata
+        if (!mapStr.empty())
+        {
+            std::istringstream ss(mapStr);
+            std::string pair;
+            while (std::getline(ss, pair, ','))
+            {
+                const auto colon = pair.find(':');
+                if (colon == std::string::npos) continue;
+                try {
+                    int m = std::stoi(pair.substr(0, colon));
+                    uint32_t pid = static_cast<uint32_t>(std::stoul(pair.substr(colon + 1)));
+                    if (m >= 0 && m < kPluginMacroCount)
+                    {
+                        ampforge::PluginParamInfo info = hp->getParameterInfo(pid);
+                        sSlotMacroParams[slot][m].name = info.name;
+                        sSlotMacroParams[slot][m].unit = info.unit;
+                        sSlotMacroParams[slot][m].minVal = info.minValue;
+                        sSlotMacroParams[slot][m].maxVal = info.maxValue;
+                        sSlotMacroParams[slot][m].defVal = info.defaultValue;
+                        sSlotMacroParams[slot][m].decimals = info.isInteger ? 0 : ((info.maxValue - info.minValue > 10.0f) ? 1 : 2);
+                        sSlotMacroParams[slot][m].paramId = pid;
+                        sSlotMacroParams[slot][m].mapped = true;
+                        sSlotMacroParams[slot][m].scalePoints = info.scalePoints;
+                        sSlotMacroParams[slot][m].isEnumeration = info.isEnumeration;
+
+                        if (m < 4 && 3 + m < static_cast<int>(kPedalDefs[pedalIdx].knobs.size()))
+                        {
+                            kPedalDefs[pedalIdx].knobs[3 + m].label = sSlotMacroParams[slot][m].name.c_str();
+                            kPedalDefs[pedalIdx].knobs[3 + m].unit = sSlotMacroParams[slot][m].unit.c_str();
+                        }
+
+                        // If forceAutoMap, sync initial parameter value from plugin
+                        if (forceAutoMap)
+                        {
+                            const float curVal = hp->getParameterValue(pid);
+                            const float norm = (info.maxValue > info.minValue)
+                                ? std::clamp((curVal - info.minValue) / (info.maxValue - info.minValue), 0.0f, 1.0f)
+                                : 0.0f;
+                            const int macroParam = kParamPlugin1Macro1 + slot * 14 + m;
+                            editParameter(macroParam, true);
+                            setParameterValue(macroParam, norm);
+                            paramValues[macroParam] = norm;
+                            displayValues[macroParam] = norm;
+                            editParameter(macroParam, false);
+                        }
+                    }
+                } catch (...) {}
+            }
+        }
+        repaint();
+    }
     // Reads just enough of the front of a .nam file to pull out its
     // top-level "architecture" field ("WaveNet", "LSTM", "SlimmableContainer"
     // for A2 captures, ...) - the same field NamBlock::getArchitecture()
@@ -1547,9 +2307,21 @@ private:
                     foundEnd = true;
                     break;
                 }
-                if (i < kParamCount)
+                if (line.rfind("STATE:", 0) == 0)
+                {
+                    const size_t eq = line.find('=', 6);
+                    if (eq != std::string::npos)
+                    {
+                        const std::string key = line.substr(6, eq - 6);
+                        const std::string val = line.substr(eq + 1);
+                        p.states[key] = val;
+                    }
+                }
+                else if (i < kParamCount)
+                {
                     p.values[i] = std::strtof(line.c_str(), nullptr);
-                ++i;
+                    ++i;
+                }
             }
 
             if (foundEnd)
@@ -1708,6 +2480,11 @@ private:
             f << "PRESET\n" << p.name << "\n";
             for (uint32_t i = 0; i < kParamCount; ++i)
                 f << paramToString(p.values[i]) << "\n";
+            for (const auto& kv : p.states)
+            {
+                if (!kv.second.empty())
+                    f << "STATE:" << kv.first << "=" << kv.second << "\n";
+            }
             f << "ENDPRESET\n";
         }
     }
@@ -1900,6 +2677,7 @@ private:
             {
                 for (uint32_t i = 0; i < kParamCount; ++i)
                     existing.values[i] = paramValues[i];
+                captureStatesForPreset(existing);
                 saveCustomPresetsToFile();
                 triggerSaveToast("Saved \"" + existing.name + "\"");
                 return;
@@ -1928,6 +2706,7 @@ private:
                 for (uint32_t i = 0; i < kParamCount; ++i)
                     existing.values[i] = paramValues[i];
                 sanitizeOutputParams(existing.values);
+                captureStatesForPreset(existing);
                 saveFactoryOverridesToFile();
                 triggerSaveToast("Saved changes to \"" + name + "\"");
                 return;
@@ -1939,6 +2718,7 @@ private:
         for (uint32_t i = 0; i < kParamCount; ++i)
             p.values[i] = paramValues[i];
         sanitizeOutputParams(p.values);
+        captureStatesForPreset(p);
         factoryOverrides.push_back(p);
         saveFactoryOverridesToFile();
         triggerSaveToast("Saved changes to \"" + name + "\"");
@@ -2021,6 +2801,7 @@ private:
                 for (uint32_t i = 0; i < kParamCount; ++i)
                     existing.values[i] = paramValues[i];
                 sanitizeOutputParams(existing.values);
+                captureStatesForPreset(existing);
                 saveCustomPresetsToFile();
 
                 activePresetName = existing.name;
@@ -2047,6 +2828,7 @@ private:
         for (uint32_t i = 0; i < kParamCount; ++i)
             p.values[i] = paramValues[i];
         sanitizeOutputParams(p.values);
+        captureStatesForPreset(p);
         customPresets.push_back(p);
         saveCustomPresetsToFile();
 
@@ -2054,6 +2836,54 @@ private:
         savingPreset = false;
         nameInputBuffer.clear();
         triggerSaveToast("Saved \"" + p.name + "\"");
+    }
+
+    void captureStatesForPreset(CustomPreset& p)
+    {
+        p.states = stateValues;
+        if (auto* provider = getProvider())
+        {
+            for (int s = 0; s < kPluginSlotCount; ++s)
+            {
+                if (ampforge::HostedPlugin* hp = provider->getHostedPlugin(s))
+                {
+                    const std::string raw = hp->saveState();
+                    if (!raw.empty())
+                    {
+                        String b64 = String::asBase64(raw.data(), raw.size());
+                        p.states[kPluginBlobStateKeys[s]] = b64.buffer();
+                    }
+                }
+            }
+        }
+    }
+
+    void applyCustomPreset(const CustomPreset& p)
+    {
+        applyValuesArray(p.values);
+        for (const auto& kv : p.states)
+        {
+            setState(kv.first.c_str(), kv.second.c_str());
+            stateValues[kv.first] = kv.second;
+        }
+        for (int s = 0; s < kPluginSlotCount; ++s)
+        {
+            const auto it = p.states.find(kPluginPathStateKeys[s]);
+            if (it == p.states.end() || it->second.empty())
+            {
+                setState(kPluginPathStateKeys[s], "");
+                setState(kPluginIdStateKeys[s], "");
+                setState(kPluginFormatStateKeys[s], "");
+                setState(kPluginMapStateKeys[s], "");
+                setState(kPluginBlobStateKeys[s], "");
+                stateValues[kPluginPathStateKeys[s]].clear();
+                slotPluginNames[s].clear();
+            }
+            else
+            {
+                slotPluginNames[s] = std::filesystem::path(it->second).stem().string();
+            }
+        }
     }
 
     void applyValuesArray(const float* values)
@@ -2141,6 +2971,16 @@ private:
     {
         resetABCompare();
         applyValuesArray(kBlankPresetValues);
+        for (int s = 0; s < kPluginSlotCount; ++s)
+        {
+            setState(kPluginPathStateKeys[s], "");
+            setState(kPluginIdStateKeys[s], "");
+            setState(kPluginFormatStateKeys[s], "");
+            setState(kPluginMapStateKeys[s], "");
+            setState(kPluginBlobStateKeys[s], "");
+            stateValues[kPluginPathStateKeys[s]].clear();
+            slotPluginNames[s].clear();
+        }
         activePresetName = "Untitled";
         presetDropdownOpen = false;
     }
@@ -2255,7 +3095,33 @@ private:
             if (my >= rowY && my < rowY + kDropdownRowH)
             {
                 resetABCompare();
-                applyValuesArray(factoryPresetValues(i));
+                const CustomPreset* overridePreset = nullptr;
+                for (const auto& ov : factoryOverrides)
+                {
+                    if (ov.name == kPresets[i].name)
+                    {
+                        overridePreset = &ov;
+                        break;
+                    }
+                }
+                if (overridePreset)
+                {
+                    applyCustomPreset(*overridePreset);
+                }
+                else
+                {
+                    applyValuesArray(factoryPresetValues(i));
+                    for (int s = 0; s < kPluginSlotCount; ++s)
+                    {
+                        setState(kPluginPathStateKeys[s], "");
+                        setState(kPluginIdStateKeys[s], "");
+                        setState(kPluginFormatStateKeys[s], "");
+                        setState(kPluginMapStateKeys[s], "");
+                        setState(kPluginBlobStateKeys[s], "");
+                        stateValues[kPluginPathStateKeys[s]].clear();
+                        slotPluginNames[s].clear();
+                    }
+                }
                 activePresetName = kPresets[i].name;
                 presetDropdownOpen = false;
                 return true;
@@ -2281,7 +3147,7 @@ private:
                 if (my >= rowY && my < rowY + kDropdownRowH)
                 {
                     resetABCompare();
-                    applyValuesArray(customPresets[ci].values);
+                    applyCustomPreset(customPresets[ci]);
                     activePresetName = customPresets[ci].name;
                     presetDropdownOpen = false;
                     return true;
@@ -2336,11 +3202,30 @@ private:
 
         const KnobDef& knob = resolveKnob(pedalIndex, knobIndex);
         float shown = paramValues[knob.paramIndex];
-        if (knob.asPercent)
+        int dec = knob.decimals;
+
+        if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+        {
+            const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+            const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+            if (sub >= 6)
+            {
+                const int m = sub - 6;
+                if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                {
+                    shown = sSlotMacroParams[s][m].minVal + shown * (sSlotMacroParams[s][m].maxVal - sSlotMacroParams[s][m].minVal);
+                    dec = sSlotMacroParams[s][m].decimals;
+                }
+            }
+        }
+        else if (knob.asPercent)
+        {
             shown *= 100.0f;
+            dec = 0;
+        }
 
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.*f", knob.asPercent ? 0 : knob.decimals, shown);
+        std::snprintf(buf, sizeof(buf), "%.*f", dec, shown);
         knobEditBuffer = buf;
         knobEditFresh = true;
         repaint();
@@ -2355,14 +3240,37 @@ private:
         if (!knobEditBuffer.empty() && knobEditBuffer != "-")
         {
             float typed = std::strtof(knobEditBuffer.c_str(), nullptr);
-            if (knob.asPercent)
-                typed *= 0.01f;
-            typed = std::max(knob.minVal, std::min(knob.maxVal, typed));
+            float finalVal = typed;
+
+            if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+            {
+                const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+                const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+                if (sub >= 6)
+                {
+                    const int m = sub - 6;
+                    if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                    {
+                        const auto& info = sSlotMacroParams[s][m];
+                        typed = std::clamp(typed, info.minVal, info.maxVal);
+                        finalVal = (info.maxVal > info.minVal) ? (typed - info.minVal) / (info.maxVal - info.minVal) : 0.0f;
+                    }
+                }
+            }
+            else if (knob.asPercent)
+            {
+                finalVal *= 0.01f;
+                finalVal = std::clamp(finalVal, knob.minVal, knob.maxVal);
+            }
+            else
+            {
+                finalVal = std::clamp(finalVal, knob.minVal, knob.maxVal);
+            }
 
             editParameter(knob.paramIndex, true);
-            setParameterValue(knob.paramIndex, typed);
-            paramValues[knob.paramIndex] = typed;
-            displayValues[knob.paramIndex] = typed;
+            setParameterValue(knob.paramIndex, finalVal);
+            paramValues[knob.paramIndex] = finalVal;
+            displayValues[knob.paramIndex] = finalVal;
             editParameter(knob.paramIndex, false);
         }
 
@@ -2479,6 +3387,15 @@ private:
 
         if (currentlyOn)
         {
+            if (kPedalDefs[pedalIndex].isExternalPlugin)
+            {
+                const int slot = kPedalDefs[pedalIndex].pluginSlotIndex;
+                if (auto* provider = getProvider())
+                {
+                    if (auto* hp = provider->getHostedPlugin(slot))
+                        hp->closeUI();
+                }
+            }
             // Start a fade-out; uiIdle() clears the parameter once the
             // animation finishes (see the moduleRemoving handling there).
             moduleRemoving[pedalIndex] = true;
@@ -2506,6 +3423,27 @@ private:
         const int onParam = kPedalDefs[pedalIndex].onParam;
         setParameterValue(onParam, 1.0f);
         paramValues[onParam] = 1.0f;
+
+        // If this is a configured built-in plugin, ensure its states are sent to DSP
+        if (kPedalDefs[pedalIndex].isExternalPlugin && kPedalDefs[pedalIndex].isBuiltinPlugin)
+        {
+            const int slot = kPedalDefs[pedalIndex].pluginSlotIndex;
+            if (slot > 0 && slot < kPluginSlotCount)
+            {
+                const size_t cfgIdx = static_cast<size_t>(slot - 1);
+                if (cfgIdx < builtinConfigs.size())
+                {
+                    const auto& cfg = builtinConfigs[cfgIdx];
+                    slotPluginNames[slot] = cfg.name;
+                    setState(kPluginFormatStateKeys[slot], cfg.format.c_str());
+                    setState(kPluginIdStateKeys[slot], cfg.id.c_str());
+                    setState(kPluginPathStateKeys[slot], cfg.path.c_str());
+                    stateValues[kPluginFormatStateKeys[slot]] = cfg.format;
+                    stateValues[kPluginIdStateKeys[slot]] = cfg.id;
+                    stateValues[kPluginPathStateKeys[slot]] = cfg.path;
+                }
+            }
+        }
 
         // Insert this pedal into the CURRENT active order at the rank its
         // defaultPosition (a fixed "recommended signal chain" constant -
@@ -2665,9 +3603,9 @@ private:
     // bottom edge relative to where the list starts.
     static float paletteContentHeight()
     {
-        if (kPaletteRows.empty())
+        if (sPaletteRows.empty())
             return 0.0f;
-        const PaletteRow& last = kPaletteRows.back();
+        const PaletteRow& last = sPaletteRows.back();
         return (last.y + last.height) - kRackTop;
     }
 
@@ -3416,6 +4354,42 @@ private:
 
     void formatKnobValue(const KnobDef& knob, float value, char* buf, size_t bufSize) const
     {
+        if (knob.paramIndex >= kParamPlugin1On && knob.paramIndex <= kParamPlugin8Macro8)
+        {
+            const int s = (knob.paramIndex - kParamPlugin1On) / 14;
+            const int sub = (knob.paramIndex - kParamPlugin1On) % 14;
+            if (sub >= 6)
+            {
+                const int m = sub - 6;
+                if (s >= 0 && s < kPluginSlotCount && m >= 0 && m < kPluginMacroCount && sSlotMacroParams[s][m].mapped)
+                {
+                    const auto& info = sSlotMacroParams[s][m];
+                    const float realVal = info.minVal + value * (info.maxVal - info.minVal);
+                    if (!info.scalePoints.empty())
+                    {
+                        std::string spLabel;
+                        float minDiff = 1e9f;
+                        for (const auto& sp : info.scalePoints)
+                        {
+                            float diff = std::abs(sp.value - realVal);
+                            if (diff < minDiff)
+                            {
+                                minDiff = diff;
+                                spLabel = sp.label;
+                            }
+                        }
+                        if (!spLabel.empty())
+                        {
+                            std::snprintf(buf, bufSize, "%s", spLabel.c_str());
+                            return;
+                        }
+                    }
+                    std::snprintf(buf, bufSize, "%.*f%s%s", info.decimals, realVal, info.unit.empty() ? "" : " ", info.unit.c_str());
+                    return;
+                }
+            }
+        }
+
         if (knob.isSyncDivision)
         {
             const int idx = std::clamp(static_cast<int>(std::round(value)), 0, kSyncDivisionCount - 1);
@@ -4426,7 +5400,7 @@ private:
         // drawRack()'s own scissor around its card stack.
         scissor(0.0f, kRackTop, kPaletteWidth, paletteVisibleBottom - kRackTop);
 
-        for (const PaletteRow& row : kPaletteRows)
+        for (const PaletteRow& row : sPaletteRows)
         {
             const float itemY = row.y + paletteScrollOffset;
             if (itemY + row.height < kRackTop || itemY > paletteVisibleBottom)
@@ -5478,6 +6452,27 @@ private:
             }
             break;
         }
+        case StompIcon::Plugin:
+        {
+            // An audio / power plug icon: two metal prongs on top, a solid plug body, and a cord at the bottom.
+            beginPath();
+            moveTo(cx - 3.5f, cy - 1.5f);
+            lineTo(cx - 3.5f, cy - 6.5f);
+            moveTo(cx + 3.5f, cy - 1.5f);
+            lineTo(cx + 3.5f, cy - 6.5f);
+            stroke();
+            closePath();
+            beginPath();
+            roundedRect(cx - 5.5f, cy - 1.5f, 11.0f, 6.0f, 1.2f);
+            fill();
+            closePath();
+            beginPath();
+            moveTo(cx, cy + 4.5f);
+            lineTo(cx, cy + 7.5f);
+            stroke();
+            closePath();
+            break;
+        }
         case StompIcon::None:
         default:
             break;
@@ -5856,6 +6851,38 @@ private:
         }
     }
 
+    static void pluginHeaderButtonsRect(float moduleLeft, float drawY, float moduleW,
+                                        float& guiX, float& guiY, float& guiW, float& guiH,
+                                        float& paramsX, float& paramsY, float& paramsW, float& paramsH,
+                                        float& browseX, float& browseY, float& browseW, float& browseH,
+                                        float& importX, float& importY, float& importW, float& importH)
+    {
+        const float rx = moduleLeft + moduleW - kRemoveSize - 12.0f;
+        const float toggleX = rx - 10.0f - kHeaderToggleW;
+        const float btnH = 22.0f;
+        const float btnY = drawY + (kModuleHeaderH - btnH) * 0.5f;
+
+        guiW = 54.0f;
+        guiH = btnH;
+        guiX = toggleX - 8.0f - guiW;
+        guiY = btnY;
+
+        paramsW = 64.0f;
+        paramsH = btnH;
+        paramsX = guiX - 6.0f - paramsW;
+        paramsY = btnY;
+
+        browseW = 76.0f;
+        browseH = btnH;
+        browseX = paramsX - 6.0f - browseW;
+        browseY = btnY;
+
+        importW = 76.0f;
+        importH = btnH;
+        importX = browseX - 6.0f - importW;
+        importY = btnY;
+    }
+
     // Draws one pedal card at the given top-Y. Used both for the normal
     // stacked rack and (with a live, cursor-following y) for whichever card
     // is currently being dragged to reorder.
@@ -5988,8 +7015,47 @@ private:
             fillColor(kColorTextDark.withAlpha(alpha));
             textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
             textLetterSpacing(0.3f);
-            text(kModuleLeft + 44.0f, drawY + kModuleHeaderH * 0.5f, def.name, nullptr);
+            std::string cardTitle = def.name;
+            bool isModCard = false;
+            if (def.isExternalPlugin)
+            {
+                if (def.isBuiltinPlugin)
+                    cardTitle = def.name;
+                else if (def.pluginSlotIndex >= 0 && !slotPluginNames[def.pluginSlotIndex].empty())
+                    cardTitle = std::string(def.name) + ": " + slotPluginNames[def.pluginSlotIndex];
+
+                if (def.pluginSlotIndex >= 0)
+                {
+                    if (auto* provider = getProvider())
+                    {
+                        if (auto* hp = provider->getHostedPlugin(def.pluginSlotIndex))
+                        {
+                            isModCard = hp->isModPlugin();
+                        }
+                    }
+                }
+            }
+            text(kModuleLeft + 44.0f, drawY + kModuleHeaderH * 0.5f, cardTitle.c_str(), nullptr);
             textLetterSpacing(0.0f);
+
+            if (isModCard)
+            {
+                const float titleWidth = static_cast<float>(cardTitle.length()) * 8.5f + 10.0f;
+                const float modBadgeX = kModuleLeft + 44.0f + titleWidth + 6.0f;
+                const float modBadgeY = drawY + (kModuleHeaderH - 16.0f) * 0.5f;
+                beginPath();
+                roundedRect(modBadgeX, modBadgeY, 34.0f, 16.0f, 3.0f);
+                fillColor(Color(0, 210, 106, 0.25f * alpha));
+                strokeColor(Color(0, 230, 120, 0.7f * alpha));
+                strokeWidth(1.0f);
+                fill();
+                stroke();
+                closePath();
+                fontSize(9.0f);
+                fillColor(Color(0, 230, 120, alpha));
+                textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                text(modBadgeX + 17.0f, modBadgeY + 8.0f, "MOD", nullptr);
+            }
 
             {
                 // A neutral dark chip rather than a permanently red one - a
@@ -6027,6 +7093,142 @@ private:
                 const float toggleX = rx - 10.0f - kHeaderToggleW;
                 drawHeaderToggle(toggleX + kHeaderToggleW * 0.5f, drawY + kModuleHeaderH * 0.5f,
                                   !isBypassed, alpha);
+            }
+
+            if (def.isExternalPlugin)
+            {
+                float gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih;
+                pluginHeaderButtonsRect(kModuleLeft, drawY, moduleW, gx, gy, gw, gh, px, py, pw, ph, bx, by, bw, bh, ix, iy, iw, ih);
+
+                const int slot = def.pluginSlotIndex;
+                const bool hasPlugin = slot >= 0 && !slotPluginNames[slot].empty();
+                ampforge::HostedPlugin* hp = nullptr;
+                if (hasPlugin)
+                {
+                    if (auto* provider = getProvider())
+                        hp = provider->getHostedPlugin(slot);
+                }
+
+                if (hasPlugin)
+                {
+                    // GUI button
+                    const bool guiHover = (lastMouseX >= gx && lastMouseX <= gx + gw &&
+                                           lastMouseY >= gy && lastMouseY <= gy + gh);
+                    const bool hasGui = (hp && hp->hasCustomUI());
+                    const bool uiOpen = (hp && hp->isUIOpen()) || (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot);
+
+                    beginPath();
+                    roundedRect(gx, gy, gw, gh, 4.0f);
+                    if (uiOpen)
+                        fillColor(Color(100, 200, 255, 0.45f * alpha));
+                    else if (hasGui)
+                        fillColor((guiHover ? Color(100, 200, 255, 0.28f) : Color(0, 0, 0, 0.28f)).withAlpha(alpha));
+                    else
+                        fillColor((guiHover ? Color(255, 255, 255, 0.18f) : Color(0, 0, 0, 0.2f)).withAlpha(alpha));
+                    fill();
+                    closePath();
+
+                    beginPath();
+                    roundedRect(gx, gy, gw, gh, 4.0f);
+                    strokeWidth(1.0f);
+                    if (uiOpen)
+                        strokeColor(Color(120, 220, 255, 0.9f * alpha));
+                    else if (hasGui)
+                        strokeColor(Color(100, 200, 255, (guiHover ? 0.75f : 0.45f) * alpha));
+                    else
+                        strokeColor(Color(255, 255, 255, (guiHover ? 0.35f : 0.18f) * alpha));
+                    stroke();
+                    closePath();
+
+                    fontSize(11.0f);
+                    if (uiOpen)
+                        fillColor(Color(255, 255, 255, alpha));
+                    else if (hasGui)
+                        fillColor(Color(120, 220, 255, (guiHover ? 1.0f : 0.85f) * alpha));
+                    else
+                        fillColor(Color(180, 180, 180, (guiHover ? 0.9f : 0.6f) * alpha));
+                    textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    text(gx + gw * 0.5f, gy + gh * 0.5f, uiOpen ? "GUI \xe2\x97\x8f" : "GUI", nullptr);
+
+                    // Params button
+                    const bool paramsHover = (lastMouseX >= px && lastMouseX <= px + pw &&
+                                              lastMouseY >= py && lastMouseY <= py + ph);
+                    const bool paramsOpen = (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == slot);
+                    beginPath();
+                    roundedRect(px, py, pw, ph, 4.0f);
+                    if (paramsOpen)
+                        fillColor(Color(255, 180, 80, 0.45f * alpha));
+                    else
+                        fillColor((paramsHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
+                    fill();
+                    closePath();
+                    beginPath();
+                    roundedRect(px, py, pw, ph, 4.0f);
+                    strokeWidth(1.0f);
+                    if (paramsOpen)
+                        strokeColor(Color(255, 200, 100, 0.9f * alpha));
+                    else
+                        strokeColor(Color(255, 255, 255, (paramsHover ? 0.45f : 0.22f) * alpha));
+                    stroke();
+                    closePath();
+
+                    fontSize(11.0f);
+                    fillColor(Color(255, 255, 255, (paramsHover || paramsOpen ? 1.0f : 0.85f) * alpha));
+                    textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    text(px + pw * 0.5f, py + ph * 0.5f, paramsOpen ? "Params \xe2\x97\x8f" : "Params", nullptr);
+                }
+
+                // Browse / Change button
+                const bool browseHover = (lastMouseX >= bx && lastMouseX <= bx + bw &&
+                                          lastMouseY >= by && lastMouseY <= by + bh);
+                beginPath();
+                roundedRect(bx, by, bw, bh, 4.0f);
+                fillColor((browseHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
+                fill();
+                closePath();
+                beginPath();
+                roundedRect(bx, by, bw, bh, 4.0f);
+                strokeWidth(1.0f);
+                strokeColor(Color(255, 255, 255, (browseHover ? 0.45f : 0.22f) * alpha));
+                stroke();
+                closePath();
+
+                fontSize(11.0f);
+                fillColor(Color(255, 255, 255, (browseHover ? 1.0f : 0.85f) * alpha));
+                textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                text(bx + bw * 0.5f, by + bh * 0.5f, hasPlugin ? "Change..." : "Browse...", nullptr);
+
+                if (hasPlugin)
+                {
+                    const std::string& path = stateValues[kPluginPathStateKeys[def.pluginSlotIndex]];
+                    const std::string& id = stateValues[kPluginIdStateKeys[def.pluginSlotIndex]];
+                    const bool isBuiltin = ampforge::PluginConfig::isBuiltinPlugin(path, id);
+                    const bool importHover = (lastMouseX >= ix && lastMouseX <= ix + iw &&
+                                              lastMouseY >= iy && lastMouseY <= iy + ih);
+
+                    beginPath();
+                    roundedRect(ix, iy, iw, ih, 4.0f);
+                    fillColor(isBuiltin
+                        ? (importHover ? Color(95, 225, 145, 0.35f) : Color(95, 225, 145, 0.2f)).withAlpha(alpha)
+                        : (importHover ? Color(255, 255, 255, 0.25f) : Color(0, 0, 0, 0.25f)).withAlpha(alpha));
+                    fill();
+                    closePath();
+                    beginPath();
+                    roundedRect(ix, iy, iw, ih, 4.0f);
+                    strokeWidth(1.0f);
+                    strokeColor(isBuiltin
+                        ? Color(95, 225, 145, (importHover ? 0.8f : 0.5f) * alpha)
+                        : Color(255, 255, 255, (importHover ? 0.45f : 0.22f) * alpha));
+                    stroke();
+                    closePath();
+
+                    fontSize(10.5f);
+                    fillColor(isBuiltin
+                        ? Color(95, 225, 145, alpha)
+                        : Color(255, 255, 255, (importHover ? 1.0f : 0.85f) * alpha));
+                    textAlign(ALIGN_CENTER | ALIGN_MIDDLE);
+                    text(ix + iw * 0.5f, iy + ih * 0.5f, isBuiltin ? "Built-in \xe2\x9c\x93" : "+ Built-in", nullptr);
+                }
             }
             if (def.hasEqCurve)
             {
@@ -6360,6 +7562,21 @@ private:
     // Local mirror of DPF State key/value pairs (currently just the
     // Cabinet block's loaded IR path), kept in sync via stateChanged().
     std::map<std::string, std::string> stateValues;
+
+    ampforge::PluginBrowserModal pluginBrowserModal;
+    ampforge::PluginParamsModal pluginParamsModal;
+    std::string slotPluginNames[kPluginSlotCount];
+    std::vector<ampforge::BuiltinPluginConfig> builtinConfigs;
+    int activeFilePickSlot = 0;
+
+    ampforge::HostedPluginProvider* getProvider() const
+    {
+#if DISTRHO_PLUGIN_WANT_DIRECT_ACCESS
+        if (void* ptr = getPluginInstancePointer())
+            return dynamic_cast<ampforge::HostedPluginProvider*>(static_cast<Plugin*>(ptr));
+#endif
+        return nullptr;
+    }
 
     // The currently loaded NAM model's architecture name, as read straight
     // out of the .nam file by readNamArchitecture() - see stateChanged()'s

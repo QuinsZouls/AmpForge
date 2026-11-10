@@ -18,6 +18,8 @@
  * of the vector.
  */
 
+#include <cstdint>
+
 namespace ampforge {
 
 class AudioBlock
@@ -32,7 +34,21 @@ public:
     // Processes a single audio sample and returns the processed result.
     // NOTE: this function runs on the real-time audio thread -
     // no new/malloc, file I/O, or mutex locking is allowed inside it.
-    virtual float processSample(float input) = 0;
+    virtual float processSample(float input)
+    {
+        float s = input;
+        processBlock(&s, 1);
+        return s;
+    }
+
+    // Processes a block of audio samples in place. Default implementation
+    // loops over processSample() so existing single-sample blocks continue
+    // to work unchanged.
+    virtual void processBlock(float* buffer, uint32_t frames)
+    {
+        for (uint32_t i = 0; i < frames; ++i)
+            buffer[i] = processSample(buffer[i]);
+    }
 
     // The block's name - will be used in the GUI and preset files later.
     virtual const char* getName() const = 0;

@@ -371,7 +371,183 @@ enum Parameters
     // curve is drawn from it too instead of from the UI's own guess.
     kParamSampleRate,
 
+    // External Plugin Slots (1 - 8)
+    // Note: The original fixed user-facing slots ("Plugin 1" .. "Plugin 4") are DEPRECATED.
+    // AmpForge now exposes a single generic "Plugin" node (Slot 0) in the palette, while
+    // additional slots are dynamically assigned to built-in / configured plugins loaded
+    // from ~/.config/ampforge/plugins.json.
+    //
+    // Slot 1 (Default / Generic "Plugin" node)
+    kParamPlugin1On,
+    kParamPlugin1Position,
+    kParamPlugin1Bypass,
+    kParamPlugin1Mix,
+    kParamPlugin1InTrim,
+    kParamPlugin1OutTrim,
+    kParamPlugin1Macro1,
+    kParamPlugin1Macro2,
+    kParamPlugin1Macro3,
+    kParamPlugin1Macro4,
+    kParamPlugin1Macro5,
+    kParamPlugin1Macro6,
+    kParamPlugin1Macro7,
+    kParamPlugin1Macro8,
+
+    // Slot 2 (Built-in Plugin Slot 1)
+    kParamPlugin2On,
+    kParamPlugin2Position,
+    kParamPlugin2Bypass,
+    kParamPlugin2Mix,
+    kParamPlugin2InTrim,
+    kParamPlugin2OutTrim,
+    kParamPlugin2Macro1,
+    kParamPlugin2Macro2,
+    kParamPlugin2Macro3,
+    kParamPlugin2Macro4,
+    kParamPlugin2Macro5,
+    kParamPlugin2Macro6,
+    kParamPlugin2Macro7,
+    kParamPlugin2Macro8,
+
+    // Slot 3 (Built-in Plugin Slot 2)
+    kParamPlugin3On,
+    kParamPlugin3Position,
+    kParamPlugin3Bypass,
+    kParamPlugin3Mix,
+    kParamPlugin3InTrim,
+    kParamPlugin3OutTrim,
+    kParamPlugin3Macro1,
+    kParamPlugin3Macro2,
+    kParamPlugin3Macro3,
+    kParamPlugin3Macro4,
+    kParamPlugin3Macro5,
+    kParamPlugin3Macro6,
+    kParamPlugin3Macro7,
+    kParamPlugin3Macro8,
+
+    // Slot 4 (Built-in Plugin Slot 3)
+    kParamPlugin4On,
+    kParamPlugin4Position,
+    kParamPlugin4Bypass,
+    kParamPlugin4Mix,
+    kParamPlugin4InTrim,
+    kParamPlugin4OutTrim,
+    kParamPlugin4Macro1,
+    kParamPlugin4Macro2,
+    kParamPlugin4Macro3,
+    kParamPlugin4Macro4,
+    kParamPlugin4Macro5,
+    kParamPlugin4Macro6,
+    kParamPlugin4Macro7,
+    kParamPlugin4Macro8,
+
+    // Slot 5 (Built-in Plugin Slot 4)
+    kParamPlugin5On,
+    kParamPlugin5Position,
+    kParamPlugin5Bypass,
+    kParamPlugin5Mix,
+    kParamPlugin5InTrim,
+    kParamPlugin5OutTrim,
+    kParamPlugin5Macro1,
+    kParamPlugin5Macro2,
+    kParamPlugin5Macro3,
+    kParamPlugin5Macro4,
+    kParamPlugin5Macro5,
+    kParamPlugin5Macro6,
+    kParamPlugin5Macro7,
+    kParamPlugin5Macro8,
+
+    // Slot 6 (Built-in Plugin Slot 5)
+    kParamPlugin6On,
+    kParamPlugin6Position,
+    kParamPlugin6Bypass,
+    kParamPlugin6Mix,
+    kParamPlugin6InTrim,
+    kParamPlugin6OutTrim,
+    kParamPlugin6Macro1,
+    kParamPlugin6Macro2,
+    kParamPlugin6Macro3,
+    kParamPlugin6Macro4,
+    kParamPlugin6Macro5,
+    kParamPlugin6Macro6,
+    kParamPlugin6Macro7,
+    kParamPlugin6Macro8,
+
+    // Slot 7 (Built-in Plugin Slot 6)
+    kParamPlugin7On,
+    kParamPlugin7Position,
+    kParamPlugin7Bypass,
+    kParamPlugin7Mix,
+    kParamPlugin7InTrim,
+    kParamPlugin7OutTrim,
+    kParamPlugin7Macro1,
+    kParamPlugin7Macro2,
+    kParamPlugin7Macro3,
+    kParamPlugin7Macro4,
+    kParamPlugin7Macro5,
+    kParamPlugin7Macro6,
+    kParamPlugin7Macro7,
+    kParamPlugin7Macro8,
+
+    // Slot 8 (Built-in Plugin Slot 7)
+    kParamPlugin8On,
+    kParamPlugin8Position,
+    kParamPlugin8Bypass,
+    kParamPlugin8Mix,
+    kParamPlugin8InTrim,
+    kParamPlugin8OutTrim,
+    kParamPlugin8Macro1,
+    kParamPlugin8Macro2,
+    kParamPlugin8Macro3,
+    kParamPlugin8Macro4,
+    kParamPlugin8Macro5,
+    kParamPlugin8Macro6,
+    kParamPlugin8Macro7,
+    kParamPlugin8Macro8,
+
     kParamCount
+};
+
+// Aliases for the single generic "Plugin" node (mapped to Slot 0 / Plugin 1 parameters):
+static constexpr int kParamPluginOn       = kParamPlugin1On;
+static constexpr int kParamPluginPosition = kParamPlugin1Position;
+static constexpr int kParamPluginBypass   = kParamPlugin1Bypass;
+static constexpr int kParamPluginMix      = kParamPlugin1Mix;
+static constexpr int kParamPluginInTrim   = kParamPlugin1InTrim;
+static constexpr int kParamPluginOutTrim  = kParamPlugin1OutTrim;
+static constexpr int kParamPluginMacro1   = kParamPlugin1Macro1;
+static constexpr int kParamPluginMacro2   = kParamPlugin1Macro2;
+static constexpr int kParamPluginMacro3   = kParamPlugin1Macro3;
+static constexpr int kParamPluginMacro4   = kParamPlugin1Macro4;
+static constexpr int kParamPluginMacro5   = kParamPlugin1Macro5;
+static constexpr int kParamPluginMacro6   = kParamPlugin1Macro6;
+static constexpr int kParamPluginMacro7   = kParamPlugin1Macro7;
+static constexpr int kParamPluginMacro8   = kParamPlugin1Macro8;
+
+static constexpr int kPluginSlotCount = 8;
+static constexpr int kPluginMacroCount = 8;
+
+static const char* const kPluginSelectFileStateKey = "plugin_select_file";
+
+static const char* const kPluginPathStateKeys[kPluginSlotCount] = {
+    "plugin_0_path", "plugin_1_path", "plugin_2_path", "plugin_3_path",
+    "plugin_4_path", "plugin_5_path", "plugin_6_path", "plugin_7_path"
+};
+static const char* const kPluginIdStateKeys[kPluginSlotCount] = {
+    "plugin_0_id", "plugin_1_id", "plugin_2_id", "plugin_3_id",
+    "plugin_4_id", "plugin_5_id", "plugin_6_id", "plugin_7_id"
+};
+static const char* const kPluginFormatStateKeys[kPluginSlotCount] = {
+    "plugin_0_format", "plugin_1_format", "plugin_2_format", "plugin_3_format",
+    "plugin_4_format", "plugin_5_format", "plugin_6_format", "plugin_7_format"
+};
+static const char* const kPluginMapStateKeys[kPluginSlotCount] = {
+    "plugin_0_map", "plugin_1_map", "plugin_2_map", "plugin_3_map",
+    "plugin_4_map", "plugin_5_map", "plugin_6_map", "plugin_7_map"
+};
+static const char* const kPluginBlobStateKeys[kPluginSlotCount] = {
+    "plugin_0_blob", "plugin_1_blob", "plugin_2_blob", "plugin_3_blob",
+    "plugin_4_blob", "plugin_5_blob", "plugin_6_blob", "plugin_7_blob"
 };
 
 // Tempo-sync note divisions, shared between the DSP side (ChainPlugin.cpp,
