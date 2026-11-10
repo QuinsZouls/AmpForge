@@ -72,16 +72,25 @@ START_NAMESPACE_DISTRHO
 // the EQ curve and clipping asymmetry a preset gets, not how hard it's
 // actually being driven beyond what was already verified.
 //
-// Note on the five values each preset's list now ends with: NAM's
-// bass/mid/treble/presence/quality. They are not optional the way the
-// output-only parameters (Input Level, CPU Load, Tuner Frequency, Buffer
-// Size, Sample Rate) are - those live at the end of the Parameters enum and
-// are simply left zero-initialized here, because a preset never sets a meter.
-// Quality is different: 0.0f would mean "the cheapest, smallest A2 submodel"
-// - the worst-sounding setting - not "the old behaviour". So all three
-// presets spell the five out explicitly: the four tone bands neutral (0dB)
-// and Quality at 1.0 (full size), which together are exactly what NamBlock
-// did before those controls existed.
+// Note on the five values each preset spells out just before its meter slots:
+// NAM's bass/mid/treble/presence/quality. Quality in particular has to be
+// written even though nothing was using it before: 0.0f would mean "the
+// cheapest, smallest A2 submodel" - the worst-sounding setting - not "the old
+// behaviour". So all three presets spell the five out: the four tone bands
+// neutral (0dB) and Quality at 1.0 (full size), which together are exactly
+// what NamBlock did before those controls existed.
+//
+// Note on the output-only parameters (Input Level, CPU Load, Tuner Frequency,
+// Buffer Size, Sample Rate): these used to be the tail of the Parameters enum,
+// which is what let every preset simply omit them - an aggregate initialiser
+// zero-fills whatever is left at the end. They are no longer the tail (the
+// external-plugin slots come after them), so all three presets now spell those
+// five zeros out explicitly and then list the plugin slots. Getting this wrong
+// is silent: the array is `float[kParamCount]`, so one missing zero shifts
+// every value after it five slots off target and still compiles. That is
+// exactly what happened when the plugin slots were first added - hence the
+// explicit zeros and the enabled=true, position=N values the plugin slots now
+// receive, which a static count of this file's own initialisers pins down.
 static constexpr uint32_t kProgramCount = 3;
 
 struct PresetDefinition
@@ -129,6 +138,21 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
             /* NAM bass,mid,treble,presence,quality */ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+            /* Output-only meters - Input Level, CPU Load, Tuner Frequency,
+               Buffer Size, Sample Rate. Spelled out as zeros rather than
+               omitted: they sit *between* the NAM block and the plugin slots
+               in the Parameters enum, and an aggregate initialiser can only
+               omit values at the END, so leaving them out would shift every
+               plugin value below five slots off target. */
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 
@@ -170,6 +194,21 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
             /* NAM bass,mid,treble,presence,quality */ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+            /* Output-only meters - Input Level, CPU Load, Tuner Frequency,
+               Buffer Size, Sample Rate. Spelled out as zeros rather than
+               omitted: they sit *between* the NAM block and the plugin slots
+               in the Parameters enum, and an aggregate initialiser can only
+               omit values at the END, so leaving them out would shift every
+               plugin value below five slots off target. */
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 
@@ -214,6 +253,21 @@ static const PresetDefinition kPresets[kProgramCount] =
             /* Harmonizer on,pos,interval,mix,bypass */ 0.0f, 11.0f, 7.0f, 0.4f, 0.0f,
             /* Exciter on,pos,freq,amount,bypass */ 0.0f, 12.0f, 6000.0f, 0.3f, 0.0f,
             /* NAM bass,mid,treble,presence,quality */ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+            /* Output-only meters - Input Level, CPU Load, Tuner Frequency,
+               Buffer Size, Sample Rate. Spelled out as zeros rather than
+               omitted: they sit *between* the NAM block and the plugin slots
+               in the Parameters enum, and an aggregate initialiser can only
+               omit values at the END, so leaving them out would shift every
+               plugin value below five slots off target. */
+            0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 1 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 19.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 2 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 20.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 3 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 21.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 4 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 22.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 5 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 23.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 6 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 24.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 7 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 25.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            /* Plugin 8 on,pos,bypass,mix,inTrim,outTrim,m1..m8 */ 0.0f, 26.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
         }
     },
 };

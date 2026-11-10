@@ -1,6 +1,9 @@
 #include "test_harness.hpp"
 
 #include "EffectChain.hpp"
+#include "ScreamerBlock.hpp"
+#include "NoiseGateBlock.hpp"
+#include <cmath>
 
 /*
  * EffectChain is what makes runtime pedal reordering possible, so these
@@ -509,4 +512,53 @@ AMPFORGE_TEST(effect_chain_process_block_copies_input_when_no_blocks_are_enabled
 
     for (std::size_t i = 0; i < input.size(); ++i)
         CHECK(inPlace[i] == input[i]);
+}
+
+AMPFORGE_TEST(effect_chain_stateful_dsp_process_block_matches_process_sample)
+{
+    ampforge::NoiseGateBlock gate1;
+    ampforge::ScreamerBlock screamer1;
+    gate1.setSampleRate(44100.0);
+    screamer1.setSampleRate(44100.0);
+
+    ampforge::EffectChain chain1;
+    chain1.addBlock(&gate1, 0);
+    chain1.addBlock(&screamer1, 1);
+    chain1.rebuildOrder();
+
+    ampforge::NoiseGateBlock gate2;
+    ampforge::ScreamerBlock screamer2;
+    gate2.setSampleRate(44100.0);
+    screamer2.setSampleRate(44100.0);
+
+    ampforge::EffectChain chain2;
+    chain2.addBlock(&gate2, 0);
+    chain2.addBlock(&screamer2, 1);
+    chain2.rebuildOrder();
+
+    constexpr uint32_t kFrames = 512;
+    float inBuf[kFrames];
+    float sampleOut[kFrames];
+    float blockOut[kFrames];
+
+    // Without this the chain has no scratch sized for 512 frames and would
+    // take its per-sample fallback - the audio would still match, and the test
+    // would be silently checking the wrong path.
+    chain2.setMaxBlockFrames(kFrames);
+
+    for (uint32_t i = 0; i < kFrames; ++i)
+    {
+        inBuf[i] = 0.5f * std::sin(static_cast<float>(i) * 0.05f);
+        sampleOut[i] = chain1.processSample(inBuf[i]);
+    }
+
+    // Separate in/out buffers on purpose: the chain's own scratch path, not
+    // the in-place shortcut a single-block chain would take.
+    chain2.processBlock(inBuf, blockOut, kFrames);
+
+    for (uint32_t i = 0; i < kFrames; ++i)
+    {
+        // Must be bit-for-bit identical
+        CHECK(sampleOut[i] == blockOut[i]);
+    }
 }

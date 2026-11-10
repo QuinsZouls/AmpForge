@@ -49,6 +49,29 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(DPF)
 
+# --- Fetch CLAP API headers ---
+FetchContent_Declare(
+  clap
+  GIT_REPOSITORY https://github.com/free-audio/clap.git
+  GIT_TAG        00113aabdccf69c2e27ac269c35b369770e8fa73 # 1.2.4
+)
+FetchContent_MakeAvailable(clap)
+
+# --- Fetch VST3 pluginterfaces headers ---
+FetchContent_Declare(
+  vst3_pluginterfaces
+  GIT_REPOSITORY https://github.com/steinbergmedia/vst3_pluginterfaces.git
+  GIT_TAG        4f547e8e102b47de4a8b8aaf343c73b700786372 # v3.8.1
+)
+FetchContent_GetProperties(vst3_pluginterfaces)
+if(NOT vst3_pluginterfaces_POPULATED)
+  FetchContent_Populate(vst3_pluginterfaces)
+endif()
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/vst3_inc")
+execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+  "${vst3_pluginterfaces_SOURCE_DIR}"
+  "${CMAKE_BINARY_DIR}/vst3_inc/pluginterfaces")
+
 # --- Fetch NeuralAmpModelerCore the same way, for the chain plugin's NAM block ---
 # NeuralAmpModelerCore itself uses two git submodules (Dependencies/eigen and
 # Dependencies/AudioDSPTools), but only Eigen is actually used by the core DSP
