@@ -39,6 +39,42 @@ namespace {
 
 constexpr double kSampleRate = 48000.0;
 
+// --- aligned allocation (portable form) -----------------------------------
+//
+// std::aligned_alloc is C11, not C++17: libstdc++ happens to expose it on
+// Linux, MinGW's does not, which is exactly how the Windows CI build broke on
+// it. Over-allocating and stashing the real pointer in the slot just before the
+// aligned one is the portable form, and it keeps the pair honest - the aligned
+// operators below allocate and free through this alone, so a pointer never
+// crosses between it and plain malloc/free.
+void* alignedAllocate(std::size_t size, std::size_t alignment)
+{
+    // Rounded up to a power of two and never smaller than a pointer: both the
+    // slack and the mask below need that, and std::align_val_t is only ever a
+    // power of two to begin with.
+    std::size_t align = alignment;
+    if (align < sizeof(void*))
+        align = sizeof(void*);
+    while (align & (align - 1))
+        ++align;
+
+    void* const raw = std::malloc(size + align - 1 + sizeof(void*));
+    if (!raw)
+        return nullptr;
+
+    const std::uintptr_t start = reinterpret_cast<std::uintptr_t>(raw) + sizeof(void*);
+    const std::uintptr_t aligned = (start + align - 1) & ~static_cast<std::uintptr_t>(align - 1);
+    reinterpret_cast<void**>(aligned)[-1] = raw;
+    return reinterpret_cast<void*>(aligned);
+}
+
+void alignedFree(void* p)
+{
+    if (!p)
+        return;
+    std::free(reinterpret_cast<void**>(p)[-1]);
+}
+
 // --- allocation counting --------------------------------------------------
 //
 // Global operator new/delete are replaced in this translation unit so a test
@@ -80,13 +116,11 @@ void* operator new[](std::size_t size) { return operator new(size); }
 void* operator new(std::size_t size, std::align_val_t alignment)
 {
     gAllocationCount.fetch_add(1, std::memory_order_relaxed);
-    const std::size_t align = static_cast<std::size_t>(alignment);
-    // malloc guarantees alignment suitable for any fundamental type, so for
-    // anything up to that this is enough; larger alignments need the aligned
-    // form.
-    void* p = (align <= alignof(std::max_align_t)) ? std::malloc(size ? size : 1)
-                                                  : std::aligned_alloc(align, ((size + align - 1) / align) * align);
-    if (p)
+    // Always through alignedAllocate(), never through a plain malloc even when
+    // the alignment would happen to be satisfied by one: the matching aligned
+    // delete below has to be able to tell how the pointer was obtained, and the
+    // only way to guarantee that is to keep the two forms symmetric.
+    if (void* p = alignedAllocate(size ? size : 1, static_cast<std::size_t>(alignment)))
         return p;
     throw std::bad_alloc();
 }
@@ -100,10 +134,10 @@ void operator delete(void* p) noexcept { std::free(p); }
 void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
-void operator delete(void* p, std::align_val_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::align_val_t) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t, std::align_val_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { std::free(p); }
+void operator delete(void* p, std::align_val_t) noexcept { alignedFree(p); }
+void operator delete[](void* p, std::align_val_t) noexcept { alignedFree(p); }
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept { alignedFree(p); }
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { alignedFree(p); }
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop

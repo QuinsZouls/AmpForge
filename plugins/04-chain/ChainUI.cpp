@@ -42,6 +42,7 @@
 #include <filesystem>
 #include <chrono>
 #include <map>
+#include <sstream>
 #include <cctype>
 #include <cstring>
 
@@ -2569,9 +2570,9 @@ private:
             //
             // This format is positional over the whole Parameters enum and has
             // no per-value keys, no header and no layout tag, so a value's
-            // meaning is decided entirely by which build wrote it. Three
-            // layouts exist, and telling them apart is mapPresetValues()'s
-            // whole job (it does it by value count - the only signal there is):
+            // meaning is decided entirely by which build wrote it. Four shapes
+            // exist, and telling them apart is mapPresetValues()'s whole job
+            // (it does it by value count - the only signal there is):
             //
             //   * Current (kParamCount values): everything up to the NAM
             //     tone/quality block, then the output-only meters (ignored -
@@ -2589,9 +2590,14 @@ private:
             //     written, because the parameters did not exist yet. Its plugin
             //     values sit five slots earlier than they do now, hence the
             //     shift in mapPresetValues().
-            //   * Pre-plugin (kParamNamBass + 5 values or fewer): the meter
-            //     block was the tail of the enum, so again it is where the NAM
-            //     block is now, and those values are dropped the same way.
+            //   * NAM-era, pre-plugin (kParamPlugin1On values, i.e. up to and
+            //     including the meter block): same layout as current, minus
+            //     the plugin slots - so it needs no shift, just the meters
+            //     skipped.
+            //   * Pre-NAM, pre-plugin (kParamNamBass + 5 values or fewer): the
+            //     meter block was the tail of the enum, so again it is where
+            //     the NAM block is now, and those values are dropped the same
+            //     way.
             //
             // Read every value line first, then decide how to map them. That
             // order matters, because this format is positional and has no
@@ -2682,24 +2688,26 @@ private:
         for (uint32_t i = 0; i < kParamCount; ++i)
             out[i] = kBlankPresetValues[i];
 
-        // A full-length file is the current layout and maps slot for slot. Any
-        // shorter one predates this build, and which of the two older shapes it
-        // has decides how its tail is read:
+        // Which of the three layouts wrote this file, from its value count
+        // alone:
         //
-        //  * more values than the NAM block starts at -> it has the plugin
-        //    slots, five enum slots earlier than they sit today (no NAM block
-        //    existed, so nothing was in between), hence the shift.
-        //  * fewer -> it predates the plugin slots entirely, and everything
-        //    past its meter block simply doesn't exist.
-        const bool currentLayout = raw.size() >= static_cast<size_t>(kParamCount);
+        //  * hasNamBlock: it is at least as long as the shape a build with the
+        //    NAM parameters and no plugin slots wrote - everything up to the
+        //    NAM block, those five, and the five meters (kParamPlugin1On
+        //    values). Everything shorter predates the NAM block, so its
+        //    124..128 are an old meter block.
+        //  * pluginEra: it is longer than the NAM block's own start, i.e. it has
+        //    plugin values - five enum slots earlier than they sit today when
+        //    there is no NAM block in front of them, hence the shift.
+        const bool hasNamBlock = raw.size() >= static_cast<size_t>(kParamPlugin1On);
         const bool pluginEra = raw.size() > static_cast<size_t>(kParamInputLevel);
-        const bool shiftPlugins = pluginEra && !currentLayout;
+        const bool shiftPlugins = pluginEra && !hasNamBlock;
 
         for (size_t k = 0; k < raw.size(); ++k)
         {
             int target = static_cast<int>(k);
 
-            if (!currentLayout && k >= static_cast<size_t>(kParamNamBass)
+            if (!hasNamBlock && k >= static_cast<size_t>(kParamNamBass)
                 && k < static_cast<size_t>(kParamInputLevel))
             {
                 // In an older layout these five slots held the meter block, and
@@ -3026,20 +3034,37 @@ private:
     // (so loading a preset never issues a UI-initiated edit/write gesture for
     // a parameter the host contract says only the plugin itself writes).
     //
-    // That is the whole group, which is why this is a range test rather than
-    // five equality tests: ChainParameters.hpp keeps every output parameter
-    // contiguous at the end of the enum (DPF's LV2 presets.ttl exporter
-    // requires it - see the comment there), so "index >= the first output
-    // parameter" is the definition. Writing this as three hand-listed names
-    // is how Buffer Size and Sample Rate ended up *not* excluded when they
-    // were added later - and a saved preset then carried a live "512" in the
-    // Buffer Size slot, which after the parameter reordering landed in NAM
-    // Presence (clamped by the DSP to a flat +12 dB, but wrong either way -
-    // see parsePresetsFromStream()'s remap comment). One range test can't rot
-    // that way when a sixth output parameter shows up.
+    // All five are named rather than tested as one range (`index >=
+    // kParamInputLevel`), which is what this used to be when the meter block
+    // was the tail of the enum. It is not the tail any more: the
+    // external-plugin slots were appended after it, so a range test would now
+    // classify all 112 plugin parameters as meters - sanitizeOutputParams()
+    // would zero every one of them in every saved/exported/imported preset,
+    // and applyValuesArray() would silently refuse to apply them. Naming them
+    // means the group can be extended in one place; the asserts below are what
+    // stop the layout moving out from under that assumption again.
     static bool isOutputOnlyParameter(uint32_t index)
     {
-        return index >= uint32_t(kParamInputLevel);
+        static_assert(kParamCpuLoad == kParamInputLevel + 1, "the meter block must be contiguous");
+        static_assert(kParamTunerFrequency == kParamInputLevel + 2, "the meter block must be contiguous");
+        static_assert(kParamBufferSize == kParamInputLevel + 3, "the meter block must be contiguous");
+        static_assert(kParamSampleRate == kParamInputLevel + 4, "the meter block must be contiguous");
+        // Not required by this function, but both preset layouts in
+        // parsePresetsFromStream() assume it - see mapPresetValues().
+        static_assert(kParamPlugin1On == kParamSampleRate + 1,
+                      "the plugin slots must follow the meter block directly");
+
+        switch (index)
+        {
+        case kParamInputLevel:
+        case kParamCpuLoad:
+        case kParamTunerFrequency:
+        case kParamBufferSize:
+        case kParamSampleRate:
+            return true;
+        default:
+            return false;
+        }
     }
 
     // Zeroes the output-only slots in a kParamCount-sized values array
