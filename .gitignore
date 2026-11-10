@@ -19,3 +19,9 @@ build-native/
 Thumbs.db
 *.swp
 *~
+
+# In-source CMake artifacts (never commit these: the build lives in build/)
+CMakeFiles/
+_deps/
+CMakeCache.txt
+CMakeUserPresets.json
