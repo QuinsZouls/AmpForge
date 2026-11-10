@@ -21,6 +21,9 @@ add_executable(ampforge_tests
     test_tonestack.cpp
     test_plugin_node.cpp
     test_lv2_host.cpp
+    test_lv2_chunk_host.cpp
+    test_lv2_atom_host.cpp
+    test_lv2_worker.cpp
     test_clap_host.cpp
     test_vst3_host.cpp
     test_plugin_scanner.cpp
@@ -43,6 +46,8 @@ target_include_directories(ampforge_tests PRIVATE
 
 target_compile_definitions(ampforge_tests PRIVATE
     TEST_LV2_BUNDLE_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_gain.lv2/"
+    TEST_LV2_CHUNK_BUNDLE_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_chunk.lv2/"
+    TEST_LV2_ATOM_BUNDLE_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_atom.lv2/"
     TEST_CLAP_PLUGIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/test_clap_gain.clap"
     TEST_VST3_PLUGIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/test_vst3_gain.so")
 
@@ -64,6 +69,38 @@ add_custom_command(TARGET test_lv2_gain POST_BUILD
         "${CMAKE_CURRENT_SOURCE_DIR}/test_lv2_gain/gain.ttl"
         "${CMAKE_CURRENT_BINARY_DIR}/test_gain.lv2/")
 
+# Build sample LV2 test plugin that requires host features and a fixed-size block
+add_library(test_lv2_chunk MODULE test_lv2_chunk/chunk.c)
+target_include_directories(test_lv2_chunk PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core/host")
+set_target_properties(test_lv2_chunk PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "chunk"
+    SUFFIX ".so"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_chunk.lv2")
+
+add_custom_command(TARGET test_lv2_chunk POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_CURRENT_SOURCE_DIR}/test_lv2_chunk/manifest.ttl"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test_lv2_chunk/chunk.ttl"
+        "${CMAKE_CURRENT_BINARY_DIR}/test_chunk.lv2/")
+
+# Build sample LV2 test plugin that declares an atom (event) port
+add_library(test_lv2_atom MODULE test_lv2_atom/atom.c)
+target_include_directories(test_lv2_atom PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../core/host")
+set_target_properties(test_lv2_atom PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "atom"
+    SUFFIX ".so"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_atom.lv2")
+
+# Both the binary and the TTLs go into the bundle: lilv reads manifest.ttl from
+# the directory the .so lives in, so a missing copy means "plugin not found".
+add_custom_command(TARGET test_lv2_atom POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_CURRENT_SOURCE_DIR}/test_lv2_atom/manifest.ttl"
+        "${CMAKE_CURRENT_SOURCE_DIR}/test_lv2_atom/atom.ttl"
+        "${CMAKE_CURRENT_BINARY_DIR}/test_atom.lv2/")
+
 # Build sample CLAP test plugin
 add_library(test_clap_gain MODULE test_clap_gain/clap_gain.c)
 target_include_directories(test_clap_gain PRIVATE "${clap_SOURCE_DIR}/include")
@@ -84,7 +121,7 @@ set_target_properties(test_vst3_gain PROPERTIES
     SUFFIX ".so"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
-add_dependencies(ampforge_tests test_lv2_gain test_clap_gain test_vst3_gain)
+add_dependencies(ampforge_tests test_lv2_gain test_lv2_chunk test_lv2_atom test_clap_gain test_vst3_gain)
 
 target_compile_features(ampforge_tests PRIVATE cxx_std_17)
 

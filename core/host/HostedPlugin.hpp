@@ -67,6 +67,14 @@ struct PluginDescriptor {
 
 class HostedPlugin {
 public:
+    // Non-copyable: a backend owns a live plugin instance plus the feature
+    // structs and port buffers whose addresses were handed to that instance, so
+    // a copy would double-free it and leave the plugin reading the *source's*
+    // freed feature/option storage. `~HostedPlugin` is user-declared (virtual),
+    // which means move construction would otherwise silently degrade to a copy.
+    HostedPlugin() = default;
+    HostedPlugin(const HostedPlugin&) = delete;
+    HostedPlugin& operator=(const HostedPlugin&) = delete;
     virtual ~HostedPlugin() = default;
 
     virtual PluginFormat getFormat() const = 0;
@@ -81,6 +89,11 @@ public:
     // Audio processing: mono in, mono out.
     // Handles multi-channel internal mapping (e.g. duplicate mono to stereo in,
     // average stereo out to mono).
+    // Any frame of `out[0 .. frames)` an implementation does not write is
+    // treated as silence by the caller (PluginNodeBlock clears its scratch
+    // buffer before every call), so an implementation is never allowed to leave
+    // a *previous* block's samples in the tail: that would surface as stale
+    // audio instead of silence.
     virtual void processBlock(const float* in, float* out, uint32_t frames) = 0;
 
     // Latency in frames
