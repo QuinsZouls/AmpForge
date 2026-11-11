@@ -24,6 +24,8 @@ typedef struct LilvNodesImpl LilvNodes;
 typedef struct LilvStateImpl LilvState;
 typedef struct LilvScalePointsImpl LilvScalePoints;
 typedef struct LilvScalePointImpl LilvScalePoint;
+typedef struct LilvUIImpl LilvUI;
+typedef struct LilvUIsImpl LilvUIs;
 typedef void LilvIter;
 
 struct LilvInstance {
@@ -95,6 +97,7 @@ struct LilvSymbols {
 
     // Nodes & World query
     LilvNodes* (*plugin_get_value)(const LilvPlugin*, const LilvNode*) = nullptr;
+    LilvNodes* (*port_get_value)(const LilvPlugin*, const LilvPort*, const LilvNode*) = nullptr;
     LilvNodes* (*world_find_nodes)(LilvWorld*, const LilvNode*, const LilvNode*, const LilvNode*) = nullptr;
     const LilvNode* (*nodes_get_first)(const LilvNodes*) = nullptr;
     LilvIter* (*nodes_begin)(const LilvNodes*) = nullptr;
@@ -103,6 +106,20 @@ struct LilvSymbols {
     bool (*nodes_is_end)(const LilvNodes*, LilvIter*) = nullptr;
     unsigned (*nodes_size)(const LilvNodes*) = nullptr;
     void (*nodes_free)(LilvNodes*) = nullptr;
+
+    // UI discovery
+    LilvUIs* (*plugin_get_uis)(const LilvPlugin*) = nullptr;
+    void (*uis_free)(LilvUIs*) = nullptr;
+    unsigned (*uis_size)(const LilvUIs*) = nullptr;
+    LilvIter* (*uis_begin)(const LilvUIs*) = nullptr;
+    const LilvUI* (*uis_get)(const LilvUIs*, LilvIter*) = nullptr;
+    LilvIter* (*uis_next)(const LilvUIs*, LilvIter*) = nullptr;
+    bool (*uis_is_end)(const LilvUIs*, LilvIter*) = nullptr;
+    const LilvNode* (*ui_get_uri)(const LilvUI*) = nullptr;
+    const LilvNodes* (*ui_get_classes)(const LilvUI*) = nullptr;
+    bool (*ui_is_a)(const LilvUI*, const LilvNode*) = nullptr;
+    const LilvNode* (*ui_get_bundle_uri)(const LilvUI*) = nullptr;
+    const LilvNode* (*ui_get_binary_uri)(const LilvUI*) = nullptr;
 
     void (*free_mem)(void*) = nullptr;
 };
@@ -218,6 +235,7 @@ private:
 
         // Nodes & World query
         loadSym(s.plugin_get_value, "lilv_plugin_get_value");
+        loadSym(s.port_get_value, "lilv_port_get_value");
         loadSym(s.world_find_nodes, "lilv_world_find_nodes");
         loadSym(s.nodes_get_first, "lilv_nodes_get_first");
         loadSym(s.nodes_begin, "lilv_nodes_begin");
@@ -226,6 +244,20 @@ private:
         loadSym(s.nodes_is_end, "lilv_nodes_is_end");
         loadSym(s.nodes_size, "lilv_nodes_size");
         loadSym(s.nodes_free, "lilv_nodes_free");
+
+        // UI discovery
+        loadSym(s.plugin_get_uis, "lilv_plugin_get_uis");
+        loadSym(s.uis_free, "lilv_uis_free");
+        loadSym(s.uis_size, "lilv_uis_size");
+        loadSym(s.uis_begin, "lilv_uis_begin");
+        loadSym(s.uis_get, "lilv_uis_get");
+        loadSym(s.uis_next, "lilv_uis_next");
+        loadSym(s.uis_is_end, "lilv_uis_is_end");
+        loadSym(s.ui_get_uri, "lilv_ui_get_uri");
+        loadSym(s.ui_get_classes, "lilv_ui_get_classes");
+        loadSym(s.ui_is_a, "lilv_ui_is_a");
+        loadSym(s.ui_get_bundle_uri, "lilv_ui_get_bundle_uri");
+        loadSym(s.ui_get_binary_uri, "lilv_ui_get_binary_uri");
 
         ok &= loadSym(s.free_mem, "lilv_free");
 

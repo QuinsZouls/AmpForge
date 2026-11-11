@@ -39,7 +39,7 @@ bool PluginWindowX11::open(const std::string& title, uint32_t width, uint32_t he
     XSetWindowAttributes attrs;
     std::memset(&attrs, 0, sizeof(attrs));
     attrs.background_pixel = BlackPixel(display, screen);
-    attrs.event_mask = StructureNotifyMask | ExposureMask;
+    attrs.event_mask = StructureNotifyMask | SubstructureNotifyMask | ExposureMask | FocusChangeMask;
 
     window = XCreateWindow(display, root,
                            100, 100, currentWidth, currentHeight, 0,
@@ -87,7 +87,7 @@ bool PluginWindowX11::open(const std::string& title, uint32_t width, uint32_t he
 
     // Map and show window
     XMapWindow(display, window);
-    XFlush(display);
+    XSync(display, False);
 
     return true;
 #else
@@ -102,7 +102,7 @@ void PluginWindowX11::close() {
         XUnmapWindow(display, window);
         XDestroyWindow(display, window);
         window = 0;
-        XFlush(display);
+        XSync(display, False);
     }
 #endif
 }
@@ -123,7 +123,6 @@ void PluginWindowX11::setSize(uint32_t width, uint32_t height) {
     if (display && window) {
         currentWidth = std::max(50u, width);
         currentHeight = std::max(50u, height);
-        XResizeWindow(display, window, currentWidth, currentHeight);
 
         XSizeHints hints;
         std::memset(&hints, 0, sizeof(hints));
@@ -138,11 +137,42 @@ void PluginWindowX11::setSize(uint32_t width, uint32_t height) {
             hints.max_height = static_cast<int>(currentHeight);
         }
         XSetWMNormalHints(display, window, &hints);
-        XFlush(display);
+        XResizeWindow(display, window, currentWidth, currentHeight);
+        XSync(display, False);
     }
 #else
     (void)width; (void)height;
 #endif
+}
+
+bool PluginWindowX11::syncSizeFromChild() {
+#if defined(__linux__)
+    if (!display || !window) return false;
+    XSync(display, False);
+    Window rootRet = 0, parentRet = 0;
+    Window* children = nullptr;
+    unsigned int numChildren = 0;
+    if (XQueryTree(display, window, &rootRet, &parentRet, &children, &numChildren) && children) {
+        bool updated = false;
+        for (unsigned int i = 0; i < numChildren; ++i) {
+            XWindowAttributes wa;
+            if (XGetWindowAttributes(display, children[i], &wa)) {
+                if (wa.width >= 50 && wa.height >= 50) {
+                    const uint32_t cw = static_cast<uint32_t>(wa.width);
+                    const uint32_t ch = static_cast<uint32_t>(wa.height);
+                    if (cw != currentWidth || ch != currentHeight) {
+                        setSize(cw, ch);
+                        updated = true;
+                    }
+                    break;
+                }
+            }
+        }
+        XFree(children);
+        return updated;
+    }
+#endif
+    return false;
 }
 
 void PluginWindowX11::idle() {
@@ -160,12 +190,31 @@ void PluginWindowX11::idle() {
             }
             break;
         } else if (ev.type == ConfigureNotify) {
-            if (static_cast<uint32_t>(ev.xconfigure.width) != currentWidth ||
-                static_cast<uint32_t>(ev.xconfigure.height) != currentHeight) {
-                currentWidth = ev.xconfigure.width;
-                currentHeight = ev.xconfigure.height;
-                if (onResize) {
-                    onResize(currentWidth, currentHeight);
+            if (ev.xconfigure.window == window) {
+                if (static_cast<uint32_t>(ev.xconfigure.width) != currentWidth ||
+                    static_cast<uint32_t>(ev.xconfigure.height) != currentHeight) {
+                    currentWidth = static_cast<uint32_t>(ev.xconfigure.width);
+                    currentHeight = static_cast<uint32_t>(ev.xconfigure.height);
+                    if (onResize) {
+                        onResize(currentWidth, currentHeight);
+                    }
+                }
+            } else if (ev.xconfigure.event == window && ev.xconfigure.width >= 50 && ev.xconfigure.height >= 50) {
+                // Child plugin window resized itself directly
+                const uint32_t cw = static_cast<uint32_t>(ev.xconfigure.width);
+                const uint32_t ch = static_cast<uint32_t>(ev.xconfigure.height);
+                if (cw != currentWidth || ch != currentHeight) {
+                    setSize(cw, ch);
+                }
+            }
+        } else if (ev.type == MapNotify && ev.xmap.event == window && ev.xmap.window != window) {
+            // Child plugin window mapped inside host container; ensure size matches
+            XWindowAttributes wa;
+            if (XGetWindowAttributes(display, ev.xmap.window, &wa) && wa.width >= 50 && wa.height >= 50) {
+                const uint32_t cw = static_cast<uint32_t>(wa.width);
+                const uint32_t ch = static_cast<uint32_t>(wa.height);
+                if (cw != currentWidth || ch != currentHeight) {
+                    setSize(cw, ch);
                 }
             }
         }

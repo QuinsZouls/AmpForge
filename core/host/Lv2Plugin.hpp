@@ -3,9 +3,14 @@
 #include "HostedPlugin.hpp"
 #include "LilvWrapper.hpp"
 #include "Lv2Worker.hpp"
+#include "PluginWindowX11.hpp"
 #include "lv2/urid.h"
 #include "lv2/options.h"
 #include "lv2/worker.h"
+#include "lv2/ui.h"
+#include "lv2/data-access.h"
+#include "lv2/instance-access.h"
+#include "lv2/lv2_external_ui.h"
 // Only for LV2_Atom: the sequence-size option below subtracts the atom header
 // from the buffer size, so the type has to be complete here, not just in the .cpp.
 #include "lv2/atom.h"
@@ -14,6 +19,7 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <mutex>
 
 namespace ampforge {
 
@@ -71,6 +77,15 @@ public:
     std::string saveState() const override;
     bool loadState(const std::string& state) override;
 
+    // UI Hosting
+    bool hasCustomUI() const override;
+    bool openUI(uintptr_t parentWindow) override;
+    void closeUI() override;
+    bool isUIOpen() const override;
+    void idleUI() override;
+    void getUISize(uint32_t& width, uint32_t& height) const override;
+    bool resizeUI(uint32_t width, uint32_t height) override;
+
     // MOD Devices support
     bool isModPlugin() const override { return isMod; }
     std::string getModBrand() const override { return modBrand; }
@@ -88,6 +103,7 @@ private:
         uint32_t paramId = 0;
         std::string symbol;
         std::string name;
+        std::string unit;
         float value = 0.0f;
         float minVal = 0.0f;
         float maxVal = 1.0f;
@@ -103,7 +119,33 @@ private:
     struct ControlOutPort {
         uint32_t index = 0;
         std::string symbol;
+        std::string name;
         float value = 0.0f;
+    };
+
+    struct ModPortDef {
+        int index = 0;
+        std::string symbol;
+        std::string name;
+    };
+
+    struct WritableParamDef {
+        std::string uri;
+        std::string label;
+        std::string rangeUri;
+        std::string fileTypes;
+        std::string currentValue;
+    };
+
+    struct QueuedAtomEvent {
+        uint32_t portIndex = 0;
+        uint32_t protocol = 0;
+        std::vector<uint8_t> bytes;
+    };
+
+    struct QueuedPatchNotification {
+        std::string uri;
+        std::string value;
     };
 
     std::string pluginUri;
@@ -113,12 +155,86 @@ private:
 
     // MOD Devices metadata
     bool isMod = false;
+    bool hasModGui = false;
     std::string modBrand;
     std::string modLabel;
     std::string modModel;
     std::string modScreenshotPath;
     std::string modThumbnailPath;
+    std::string modResourcesDir;
+    std::string modIconTemplatePath;
+    std::string modStylesheetPath;
+    std::string modJavascriptPath;
     std::vector<std::string> modguiPortSymbols;
+    std::vector<ModPortDef> modPorts;
+    std::vector<WritableParamDef> writableParams;
+
+    // Native Binary LV2 UI metadata & runtime handles
+    bool hasBinaryUI = false;
+    std::string uiUri;
+    std::string uiBinaryPath;
+    std::string uiBundlePath;
+    std::string uiClassUri;
+    void* uiLibHandle = nullptr;
+    const LV2UI_Descriptor* uiDescriptor = nullptr;
+    LV2UI_Handle uiHandle = nullptr;
+    const LV2UI_Idle_Interface* uiIdleInterface = nullptr;
+    const LV2UI_Show_Interface* uiShowInterface = nullptr;
+    const LV2UI_Resize* uiPluginResize = nullptr;
+    LV2_External_UI_Widget* uiExternalWidget = nullptr;
+    LV2_External_UI_Host uiExternalHost{};
+    LV2_Extension_Data_Feature uiDataAccessFeature{};
+    LV2UI_Resize uiResizeFeature{};
+    LV2UI_Port_Map uiPortMapFeature{};
+    LV2UI_Port_Subscribe uiPortSubscribeFeature{};
+    LV2UI_Touch uiTouchFeature{};
+    LV2UI_Request_Value uiRequestValueFeature{};
+    std::vector<LV2_Options_Option> uiOptions;
+    std::vector<LV2_Feature> uiFeatureStructs;
+    std::vector<const LV2_Feature*> uiFeatures;
+    float uiScaleFactorValue = 1.0f;
+    float uiUpdateRateValue = 30.0f;
+    std::unique_ptr<PluginWindowX11> windowHost;
+
+    // MOD WebKit2GTK UI state (opaque pointer managed in Lv2Plugin.cpp)
+    struct ModWebGuiState;
+    std::unique_ptr<ModWebGuiState> modWebGui;
+
+    bool uiOpen = false;
+    bool uiClosedByPlugin = false;
+    uint32_t uiWidth = 860;
+    uint32_t uiHeight = 600;
+
+    std::vector<float> lastUiControlValues;
+    std::vector<float> lastUiControlOutValues;
+    mutable std::mutex atomEventMutex;
+    std::vector<QueuedAtomEvent> pendingDspAtomEvents;
+    std::vector<QueuedAtomEvent> pendingUiAtomEvents;
+    std::vector<QueuedPatchNotification> pendingPatchNotifications;
+
+    void discoverUIs();
+    bool openBinaryUI(uintptr_t parentWindow);
+    bool openModWebUI();
+    void enqueuePatchGet(const std::string& uri = "");
+    void enqueuePatchSet(const std::string& uri, char valueType, const std::string& value);
+    std::string buildModGuiHtml() const;
+
+    static void uiWriteFunction(LV2UI_Controller controller,
+                                uint32_t port_index,
+                                uint32_t buffer_size,
+                                uint32_t port_protocol,
+                                const void* buffer);
+    static int uiHostResizeCallback(LV2UI_Feature_Handle handle, int width, int height);
+    static uint32_t uiPortIndexCallback(LV2UI_Feature_Handle handle, const char* symbol);
+    static uint32_t uiPortSubscribeCallback(LV2UI_Feature_Handle handle, uint32_t port_index,
+                                            uint32_t port_protocol, const LV2_Feature* const* features);
+    static uint32_t uiPortUnsubscribeCallback(LV2UI_Feature_Handle handle, uint32_t port_index,
+                                              uint32_t port_protocol, const LV2_Feature* const* features);
+    static void uiTouchCallback(LV2UI_Feature_Handle handle, uint32_t port_index, bool grabbed);
+    static LV2UI_Request_Value_Status uiRequestValueCallback(LV2UI_Feature_Handle handle,
+                                                             LV2_URID key, LV2_URID type,
+                                                             const LV2_Feature* const* features);
+    static void uiExternalClosedCallback(LV2UI_Controller controller);
 
     LilvWorld* world = nullptr;
     const LilvPlugin* plugin = nullptr;

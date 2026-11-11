@@ -1038,7 +1038,34 @@ protected:
                 if (auto* hp = provider->getHostedPlugin(s))
                 {
                     if (hp->isUIOpen())
+                    {
                         hp->idleUI();
+
+                        // Sync parameter changes made inside the plugin's custom GUI back to host macro knobs
+                        for (int m = 0; m < kPluginMacroCount; ++m)
+                        {
+                            const auto& info = sSlotMacroParams[s][m];
+                            if (info.mapped && info.maxVal > info.minVal)
+                            {
+                                const float val = hp->getParameterValue(info.paramId);
+                                const float norm = std::clamp((val - info.minVal) / (info.maxVal - info.minVal), 0.0f, 1.0f);
+                                const int macroParam = kParamPlugin1Macro1 + s * 14 + m;
+                                if (std::fabs(paramValues[macroParam] - norm) > 0.002f && draggingKnobPedal < 0)
+                                {
+                                    paramValues[macroParam] = norm;
+                                    displayValues[macroParam] = norm;
+                                    setParameterValue(macroParam, norm);
+                                    anyChanged = true;
+                                }
+                                if (pluginParamsModal.isOpen() && pluginParamsModal.getTargetSlot() == s)
+                                {
+                                    pluginParamsModal.updateParamValue(info.paramId, val);
+                                }
+                            }
+                        }
+                        if (anyChanged)
+                            repaint();
+                    }
 
                     if (!slotPluginNames[s].empty() && !sSlotMacroParams[s][0].mapped && hp->getParameterCount() > 0)
                     {
@@ -1496,9 +1523,16 @@ protected:
                         if (hp && hp->hasCustomUI())
                         {
                             if (hp->isUIOpen())
+                            {
                                 hp->closeUI();
-                            else
-                                hp->openUI(getWindow().getNativeWindowHandle());
+                            }
+                            else if (!hp->openUI(getWindow().getNativeWindowHandle()))
+                            {
+                                const std::string name = (!slotPluginNames[slot].empty()) ? slotPluginNames[slot] : def.name;
+                                const std::string mappingStr = stateValues[kPluginMapStateKeys[slot]];
+                                const std::string fmtStr = stateValues[kPluginFormatStateKeys[slot]];
+                                pluginParamsModal.open(slot, hp, name, mappingStr, fmtStr);
+                            }
                         }
                         else
                         {

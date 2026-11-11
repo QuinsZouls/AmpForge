@@ -4,46 +4,43 @@
 #include <cstring>
 #include <sstream>
 
+#if defined(__linux__) || defined(__APPLE__)
+# include <poll.h>
+#endif
+
 namespace ampforge {
 
 namespace {
 
-const void* clapHostGetExtension(const clap_host_t* host, const char* extension_id) {
-    (void)host; (void)extension_id;
-    return nullptr;
+// CLAP Host GUI callbacks
+void CLAP_ABI clapHostGuiResizeHintsChanged(const clap_host_t* /*host*/) {}
+
+bool CLAP_ABI clapHostGuiRequestResize(const clap_host_t* host, uint32_t width, uint32_t height) {
+    if (!host || !host->host_data) return false;
+    auto* self = static_cast<ClapPlugin*>(host->host_data);
+    return self-> resizeUI(width, height);
 }
 
-void clapHostRequestRestart(const clap_host_t* host) {
-    (void)host;
+bool CLAP_ABI clapHostGuiRequestShow(const clap_host_t* /*host*/) {
+    return true;
 }
 
-void clapHostRequestProcess(const clap_host_t* host) {
-    (void)host;
+bool CLAP_ABI clapHostGuiRequestHide(const clap_host_t* /*host*/) {
+    return true;
 }
 
-void clapHostRequestCallback(const clap_host_t* host) {
-    (void)host;
+void CLAP_ABI clapHostGuiClosed(const clap_host_t* host, bool was_destroyed) {
+    if (!host || !host->host_data) return;
+    // Handled via friend/member helper
+    (void)was_destroyed;
 }
-
-static const clap_host_t gHost = {
-    CLAP_VERSION,
-    nullptr,
-    "AmpForge",
-    "QuinsZouls",
-    "https://ampforge.org",
-    "0.5.0",
-    clapHostGetExtension,
-    clapHostRequestRestart,
-    clapHostRequestProcess,
-    clapHostRequestCallback
-};
 
 struct MemOStream {
     clap_ostream stream;
     std::string data;
 };
 
-static int64_t memStreamWrite(const clap_ostream* s, const void* buffer, uint64_t size) {
+static int64_t CLAP_ABI memStreamWrite(const clap_ostream* s, const void* buffer, uint64_t size) {
     auto* self = reinterpret_cast<MemOStream*>(s->ctx);
     self->data.append(reinterpret_cast<const char*>(buffer), size);
     return static_cast<int64_t>(size);
@@ -56,7 +53,7 @@ struct MemIStream {
     size_t pos;
 };
 
-static int64_t memStreamRead(const clap_istream* s, void* buffer, uint64_t size) {
+static int64_t CLAP_ABI memStreamRead(const clap_istream* s, void* buffer, uint64_t size) {
     auto* self = reinterpret_cast<MemIStream*>(s->ctx);
     if (self->pos >= self->size) return 0;
     const size_t toRead = std::min(static_cast<size_t>(size), self->size - self->pos);
@@ -69,12 +66,12 @@ struct EventListWrapper {
     clap_input_events inList;
     std::vector<clap_event_param_value> events;
 
-    static uint32_t eventListSize(const clap_input_events* list) {
+    static uint32_t CLAP_ABI eventListSize(const clap_input_events* list) {
         auto* self = reinterpret_cast<const EventListWrapper*>(list);
         return static_cast<uint32_t>(self->events.size());
     }
 
-    static const clap_event_header_t* eventListGet(const clap_input_events* list, uint32_t index) {
+    static const clap_event_header_t* CLAP_ABI eventListGet(const clap_input_events* list, uint32_t index) {
         auto* self = reinterpret_cast<const EventListWrapper*>(list);
         if (index < self->events.size()) {
             return &self->events[index].header;
@@ -83,12 +80,266 @@ struct EventListWrapper {
     }
 };
 
-static uint32_t dummyOutputEventsSize(const clap_output_events*) { return 0; }
-static bool dummyOutputEventsTryPush(const clap_output_events*, const clap_event_header*) { return true; }
-
 } // namespace
 
-ClapPlugin::ClapPlugin() = default;
+void ClapPlugin::initHost() {
+    mainThreadId = std::this_thread::get_id();
+    hostInstance.clap_version = CLAP_VERSION;
+    hostInstance.host_data = this;
+    hostInstance.name = "AmpForge";
+    hostInstance.vendor = "QuinsZouls";
+    hostInstance.url = "https://ampforge.org";
+    hostInstance.version = "0.5.0";
+    hostInstance.get_extension = &ClapPlugin::hostGetExtension;
+    hostInstance.request_restart = &ClapPlugin::hostRequestRestart;
+    hostInstance.request_process = &ClapPlugin::hostRequestProcess;
+    hostInstance.request_callback = &ClapPlugin::hostRequestCallback;
+}
+
+const void* ClapPlugin::hostGetExtension(const clap_host_t* host, const char* extensionId) {
+    if (!host || !extensionId) return nullptr;
+
+    static const clap_host_gui_t kHostGui = {
+        /* resize_hints_changed */ [](const clap_host_t*) {},
+        /* request_resize */ [](const clap_host_t* h, uint32_t w, uint32_t ht) -> bool {
+            if (!h || !h->host_data) return false;
+            return static_cast<ClapPlugin*>(h->host_data)->onHostRequestResize(w, ht);
+        },
+        /* request_show */ [](const clap_host_t*) -> bool { return true; },
+        /* request_hide */ [](const clap_host_t*) -> bool { return true; },
+        /* closed */ [](const clap_host_t* h, bool wasDestroyed) {
+            if (!h || !h->host_data) return;
+            static_cast<ClapPlugin*>(h->host_data)->onHostGuiClosed(wasDestroyed);
+        }
+    };
+
+    static const clap_host_timer_support_t kHostTimer = {
+        /* register_timer */ [](const clap_host_t* h, uint32_t periodMs, clap_id* timerId) -> bool {
+            if (!h || !h->host_data || !timerId) return false;
+            return static_cast<ClapPlugin*>(h->host_data)->onHostRegisterTimer(periodMs, timerId);
+        },
+        /* unregister_timer */ [](const clap_host_t* h, clap_id timerId) -> bool {
+            if (!h || !h->host_data) return false;
+            return static_cast<ClapPlugin*>(h->host_data)->onHostUnregisterTimer(timerId);
+        }
+    };
+
+    static const clap_host_posix_fd_support_t kHostPosixFd = {
+        /* register_fd */ [](const clap_host_t* h, int fd, clap_posix_fd_flags_t flags) -> bool {
+            if (!h || !h->host_data) return false;
+            return static_cast<ClapPlugin*>(h->host_data)->onHostRegisterFd(fd, flags);
+        },
+        /* modify_fd */ [](const clap_host_t* h, int fd, clap_posix_fd_flags_t flags) -> bool {
+            if (!h || !h->host_data) return false;
+            return static_cast<ClapPlugin*>(h->host_data)->onHostModifyFd(fd, flags);
+        },
+        /* unregister_fd */ [](const clap_host_t* h, int fd) -> bool {
+            if (!h || !h->host_data) return false;
+            return static_cast<ClapPlugin*>(h->host_data)->onHostUnregisterFd(fd);
+        }
+    };
+
+    static const clap_host_params_t kHostParams = {
+        /* rescan */ [](const clap_host_t* h, clap_param_rescan_flags flags) {
+            if (!h || !h->host_data) return;
+            static_cast<ClapPlugin*>(h->host_data)->onHostParamRescan(flags);
+        },
+        /* clear */ [](const clap_host_t*, clap_id, clap_param_clear_flags) {},
+        /* request_flush */ [](const clap_host_t* h) {
+            if (!h || !h->host_data) return;
+            static_cast<ClapPlugin*>(h->host_data)->flushRequested.store(true, std::memory_order_release);
+        }
+    };
+
+    static const clap_host_thread_check_t kHostThreadCheck = {
+        /* is_main_thread */ [](const clap_host_t* h) -> bool {
+            if (!h || !h->host_data) return true;
+            auto* self = static_cast<ClapPlugin*>(h->host_data);
+            return std::this_thread::get_id() == self->mainThreadId;
+        },
+        /* is_audio_thread */ [](const clap_host_t* h) -> bool {
+            if (!h || !h->host_data) return false;
+            auto* self = static_cast<ClapPlugin*>(h->host_data);
+            return self->inAudioThread.load(std::memory_order_relaxed);
+        }
+    };
+
+    static const clap_host_log_t kHostLog = {
+        /* log */ [](const clap_host_t*, clap_log_severity, const char*) {}
+    };
+
+    static const clap_host_latency_t kHostLatency = {
+        /* changed */ [](const clap_host_t*) {}
+    };
+
+    static const clap_host_state_t kHostState = {
+        /* mark_dirty */ [](const clap_host_t*) {}
+    };
+
+    if (std::strcmp(extensionId, CLAP_EXT_GUI) == 0) return &kHostGui;
+    if (std::strcmp(extensionId, CLAP_EXT_TIMER_SUPPORT) == 0) return &kHostTimer;
+    if (std::strcmp(extensionId, CLAP_EXT_POSIX_FD_SUPPORT) == 0) return &kHostPosixFd;
+    if (std::strcmp(extensionId, CLAP_EXT_PARAMS) == 0) return &kHostParams;
+    if (std::strcmp(extensionId, CLAP_EXT_THREAD_CHECK) == 0) return &kHostThreadCheck;
+    if (std::strcmp(extensionId, CLAP_EXT_LOG) == 0) return &kHostLog;
+    if (std::strcmp(extensionId, CLAP_EXT_LATENCY) == 0) return &kHostLatency;
+    if (std::strcmp(extensionId, CLAP_EXT_STATE) == 0) return &kHostState;
+
+    return nullptr;
+}
+
+void ClapPlugin::hostRequestRestart(const clap_host_t* /*host*/) {}
+void ClapPlugin::hostRequestProcess(const clap_host_t* /*host*/) {}
+
+void ClapPlugin::hostRequestCallback(const clap_host_t* host) {
+    if (!host || !host->host_data) return;
+    static_cast<ClapPlugin*>(host->host_data)->callbackRequested.store(true, std::memory_order_release);
+}
+
+bool ClapPlugin::outputEventsTryPush(const clap_output_events* list, const clap_event_header_t* event) {
+    if (!list || !list->ctx || !event) return true;
+    static_cast<ClapPlugin*>(list->ctx)->handleOutputEvent(event);
+    return true;
+}
+
+void ClapPlugin::handleOutputEvent(const clap_event_header_t* event) {
+    if (!event || event->space_id != CLAP_CORE_EVENT_SPACE_ID) return;
+    if (event->type == CLAP_EVENT_PARAM_VALUE && event->size >= sizeof(clap_event_param_value_t)) {
+        const auto* pev = reinterpret_cast<const clap_event_param_value_t*>(event);
+        for (auto& p : parameters) {
+            if (p.id == pev->param_id) {
+                p.currentValue = std::clamp(static_cast<float>(pev->value), p.minValue, p.maxValue);
+                break;
+            }
+        }
+    }
+}
+
+bool ClapPlugin::onHostRequestResize(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return false;
+    cachedUIWidth = width;
+    cachedUIHeight = height;
+    if (windowHost && windowHost->isOpen()) {
+        windowHost->setSize(width, height);
+    }
+    return true;
+}
+
+void ClapPlugin::onHostGuiClosed(bool wasDestroyed) {
+    uiClosedByPlugin.store(true, std::memory_order_release);
+    if (wasDestroyed) {
+        uiDestroyedByPlugin.store(true, std::memory_order_release);
+    }
+}
+
+bool ClapPlugin::onHostRegisterTimer(uint32_t periodMs, clap_id* timerId) {
+    if (!timerId) return false;
+    RegisteredTimer t;
+    t.id = nextTimerId++;
+    t.periodMs = std::max(8u, periodMs);
+    t.lastFired = std::chrono::steady_clock::now();
+    timers.push_back(t);
+    *timerId = t.id;
+    return true;
+}
+
+bool ClapPlugin::onHostUnregisterTimer(clap_id timerId) {
+    for (auto it = timers.begin(); it != timers.end(); ++it) {
+        if (it->id == timerId) {
+            timers.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ClapPlugin::onHostRegisterFd(int fd, clap_posix_fd_flags_t flags) {
+    if (fd < 0) return false;
+    for (auto& r : posixFds) {
+        if (r.fd == fd) {
+            r.flags = flags;
+            return true;
+        }
+    }
+    posixFds.push_back({fd, flags});
+    return true;
+}
+
+bool ClapPlugin::onHostModifyFd(int fd, clap_posix_fd_flags_t flags) {
+    for (auto& r : posixFds) {
+        if (r.fd == fd) {
+            r.flags = flags;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ClapPlugin::onHostUnregisterFd(int fd) {
+    for (auto it = posixFds.begin(); it != posixFds.end(); ++it) {
+        if (it->fd == fd) {
+            posixFds.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
+void ClapPlugin::onHostParamRescan(clap_param_rescan_flags flags) {
+    if ((flags & (CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_ALL)) != 0) {
+        refreshParamValuesFromPlugin();
+    }
+}
+
+void ClapPlugin::refreshParamValuesFromPlugin() {
+    if (!plugin || !paramsExt || !paramsExt->get_value) return;
+    for (auto& p : parameters) {
+        double val = p.currentValue;
+        if (paramsExt->get_value(plugin, p.id, &val)) {
+            p.currentValue = std::clamp(static_cast<float>(val), p.minValue, p.maxValue);
+        }
+    }
+}
+
+void ClapPlugin::onHostParamFlush() {
+    if (!plugin || !paramsExt || !paramsExt->flush) return;
+
+    EventListWrapper inEvents;
+    inEvents.inList.ctx = &inEvents;
+    inEvents.inList.size = EventListWrapper::eventListSize;
+    inEvents.inList.get = EventListWrapper::eventListGet;
+
+    {
+        std::lock_guard<std::mutex> lock(pendingChangesMutex);
+        for (const auto& chg : pendingChanges) {
+            clap_event_param_value ev{};
+            ev.header.size = sizeof(ev);
+            ev.header.time = 0;
+            ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+            ev.header.type = CLAP_EVENT_PARAM_VALUE;
+            ev.header.flags = 0;
+            ev.param_id = chg.id;
+            ev.cookie = nullptr;
+            ev.note_id = -1;
+            ev.port_index = -1;
+            ev.channel = -1;
+            ev.key = -1;
+            ev.value = chg.value;
+            inEvents.events.push_back(ev);
+        }
+        pendingChanges.clear();
+    }
+
+    clap_output_events outEvents;
+    outEvents.ctx = this;
+    outEvents.try_push = &ClapPlugin::outputEventsTryPush;
+
+    paramsExt->flush(plugin, &inEvents.inList, &outEvents);
+}
+
+ClapPlugin::ClapPlugin() {
+    initHost();
+}
 
 ClapPlugin::~ClapPlugin() {
     unload();
@@ -96,6 +347,7 @@ ClapPlugin::~ClapPlugin() {
 
 bool ClapPlugin::load(const std::string& path, const std::string& targetPluginId) {
     unload();
+    initHost();
 
 #if defined(__linux__) || defined(__APPLE__)
     libraryHandle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -163,7 +415,7 @@ bool ClapPlugin::load(const std::string& path, const std::string& targetPluginId
     vendorName = desc->vendor ? desc->vendor : "Unknown";
     pluginPath = path;
 
-    plugin = factory->create_plugin(factory, &gHost, desc->id);
+    plugin = factory->create_plugin(factory, &hostInstance, desc->id);
     if (!plugin) {
         lastError = "Failed to create CLAP plugin instance";
         unload();
@@ -187,6 +439,10 @@ bool ClapPlugin::load(const std::string& path, const std::string& targetPluginId
         plugin->get_extension(plugin, CLAP_EXT_STATE));
     guiExt = reinterpret_cast<const clap_plugin_gui_t*>(
         plugin->get_extension(plugin, CLAP_EXT_GUI));
+    timerExt = reinterpret_cast<const clap_plugin_timer_support_t*>(
+        plugin->get_extension(plugin, CLAP_EXT_TIMER_SUPPORT));
+    posixFdExt = reinterpret_cast<const clap_plugin_posix_fd_support_t*>(
+        plugin->get_extension(plugin, CLAP_EXT_POSIX_FD_SUPPORT));
 
     // Channels
     inChannels = 1;
@@ -245,7 +501,11 @@ bool ClapPlugin::load(const std::string& path, const std::string& targetPluginId
 
 void ClapPlugin::unload() {
     closeUI();
+    timers.clear();
+    posixFds.clear();
     guiExt = nullptr;
+    timerExt = nullptr;
+    posixFdExt = nullptr;
     deactivate();
     if (plugin) {
         plugin->destroy(plugin);
@@ -262,7 +522,10 @@ void ClapPlugin::unload() {
     }
 #endif
     parameters.clear();
-    pendingChanges.clear();
+    {
+        std::lock_guard<std::mutex> lock(pendingChangesMutex);
+        pendingChanges.clear();
+    }
     pluginId.clear();
     pluginName.clear();
     vendorName.clear();
@@ -309,6 +572,7 @@ void ClapPlugin::processBlock(const float* in, float* out, uint32_t frames) {
         return;
     }
 
+    inAudioThread.store(true, std::memory_order_relaxed);
     const uint32_t processFrames = std::min(frames, activeMaxBlock);
 
     // Prepare inputs
@@ -339,27 +603,32 @@ void ClapPlugin::processBlock(const float* in, float* out, uint32_t frames) {
     inEvents.inList.size = EventListWrapper::eventListSize;
     inEvents.inList.get = EventListWrapper::eventListGet;
 
-    for (const auto& chg : pendingChanges) {
-        clap_event_param_value ev{};
-        ev.header.size = sizeof(ev);
-        ev.header.time = 0;
-        ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
-        ev.header.type = CLAP_EVENT_PARAM_VALUE;
-        ev.header.flags = 0;
-        ev.param_id = chg.id;
-        ev.cookie = nullptr;
-        ev.note_id = -1;
-        ev.port_index = -1;
-        ev.channel = -1;
-        ev.key = -1;
-        ev.value = chg.value;
-        inEvents.events.push_back(ev);
+    {
+        std::unique_lock<std::mutex> lock(pendingChangesMutex, std::try_to_lock);
+        if (lock.owns_lock() && !pendingChanges.empty()) {
+            for (const auto& chg : pendingChanges) {
+                clap_event_param_value ev{};
+                ev.header.size = sizeof(ev);
+                ev.header.time = 0;
+                ev.header.space_id = CLAP_CORE_EVENT_SPACE_ID;
+                ev.header.type = CLAP_EVENT_PARAM_VALUE;
+                ev.header.flags = 0;
+                ev.param_id = chg.id;
+                ev.cookie = nullptr;
+                ev.note_id = -1;
+                ev.port_index = -1;
+                ev.channel = -1;
+                ev.key = -1;
+                ev.value = chg.value;
+                inEvents.events.push_back(ev);
+            }
+            pendingChanges.clear();
+        }
     }
-    pendingChanges.clear();
 
     clap_output_events outEvents;
-    outEvents.ctx = nullptr;
-    outEvents.try_push = dummyOutputEventsTryPush;
+    outEvents.ctx = this;
+    outEvents.try_push = &ClapPlugin::outputEventsTryPush;
 
     clap_process_t proc;
     proc.steady_time = -1;
@@ -382,6 +651,8 @@ void ClapPlugin::processBlock(const float* in, float* out, uint32_t frames) {
     } else {
         std::copy(outChannelL.data(), outChannelL.data() + processFrames, out);
     }
+
+    inAudioThread.store(false, std::memory_order_relaxed);
 }
 
 uint32_t ClapPlugin::getLatency() const {
@@ -407,6 +678,7 @@ PluginParamInfo ClapPlugin::getParameterInfo(uint32_t index) const {
         info.defaultValue = p.defaultValue;
         info.isInteger = p.isInteger;
         info.isBoolean = p.isBoolean;
+        info.group = p.module;
     }
     return info;
 }
@@ -421,7 +693,13 @@ float ClapPlugin::getParameterValue(uint32_t id) const {
 void ClapPlugin::setParameterValue(uint32_t id, float value) {
     if (id < parameters.size()) {
         parameters[id].currentValue = std::clamp(value, parameters[id].minValue, parameters[id].maxValue);
-        pendingChanges.push_back({ parameters[id].id, static_cast<double>(parameters[id].currentValue) });
+        {
+            std::lock_guard<std::mutex> lock(pendingChangesMutex);
+            pendingChanges.push_back({ parameters[id].id, static_cast<double>(parameters[id].currentValue) });
+        }
+        if (!isActivated && plugin && paramsExt && paramsExt->flush) {
+            onHostParamFlush();
+        }
     }
 }
 
@@ -456,15 +734,7 @@ bool ClapPlugin::loadState(const std::string& state) {
         mem.pos = 0;
 
         if (stateExt->load(plugin, &mem.stream)) {
-            // Re-read param values after loading state
-            if (paramsExt) {
-                for (auto& p : parameters) {
-                    double val = p.defaultValue;
-                    if (paramsExt->get_value(plugin, p.id, &val)) {
-                        p.currentValue = static_cast<float>(val);
-                    }
-                }
-            }
+            refreshParamValuesFromPlugin();
             return true;
         }
     }
@@ -487,21 +757,101 @@ bool ClapPlugin::loadState(const std::string& state) {
 }
 
 bool ClapPlugin::hasCustomUI() const {
-    return guiExt != nullptr;
+    if (!plugin || !guiExt || !guiExt->is_api_supported) return false;
+#if defined(__linux__)
+    if (guiExt->is_api_supported(plugin, CLAP_WINDOW_API_X11, false)) return true;
+    if (guiExt->is_api_supported(plugin, CLAP_WINDOW_API_X11, true)) return true;
+#endif
+    return guiExt->is_api_supported(plugin, "", true) || guiExt->is_api_supported(plugin, nullptr, true);
 }
 
 bool ClapPlugin::openUI(uintptr_t parentWindow) {
     if (!plugin || !guiExt) return false;
     if (isUIOpenFlag) return true;
 
-    // Check if floating window is supported
-    const bool canFloat = guiExt->is_api_supported && guiExt->is_api_supported(plugin, nullptr, true);
-    const bool canX11 = guiExt->is_api_supported && guiExt->is_api_supported(plugin, CLAP_WINDOW_API_X11, false);
+    mainThreadId = std::this_thread::get_id();
+    uiClosedByPlugin.store(false, std::memory_order_release);
+    uiDestroyedByPlugin.store(false, std::memory_order_release);
+
+    const bool canX11Embedded = guiExt->is_api_supported &&
+                                guiExt->is_api_supported(plugin, CLAP_WINDOW_API_X11, false);
+
+    // Prefer embedded X11 window first (standard CLAP protocol supported by DPF, JUCE, Surge, etc.)
+    if (canX11Embedded) {
+        if (guiExt->create(plugin, CLAP_WINDOW_API_X11, false)) {
+            if (guiExt->set_scale) {
+                guiExt->set_scale(plugin, 1.0);
+            }
+            uint32_t width = cachedUIWidth, height = cachedUIHeight;
+            if (guiExt->get_size) {
+                guiExt->get_size(plugin, &width, &height);
+            }
+            if (width < 50) width = 800;
+            if (height < 50) height = 600;
+            cachedUIWidth = width;
+            cachedUIHeight = height;
+
+            const bool canResize = guiExt->can_resize ? guiExt->can_resize(plugin) : false;
+
+            windowHost = std::make_unique<PluginWindowX11>();
+            if (windowHost->open(pluginName, width, height, parentWindow, canResize)) {
+                clap_window_t win{};
+                win.api = CLAP_WINDOW_API_X11;
+                win.x11 = static_cast<clap_xwnd>(windowHost->getWindowHandle());
+
+                if (!guiExt->set_parent || guiExt->set_parent(plugin, &win)) {
+                    if (!guiExt->show || guiExt->show(plugin)) {
+                        windowHost->syncSizeFromChild();
+                        windowHost->onClose = [this]() {
+                            closeUI();
+                        };
+                        windowHost->onResize = [this](uint32_t w, uint32_t h) {
+                            if (plugin && guiExt) {
+                                uint32_t adjW = w, adjH = h;
+                                if (guiExt->adjust_size) {
+                                    guiExt->adjust_size(plugin, &adjW, &adjH);
+                                }
+                                if (guiExt->set_size) {
+                                    guiExt->set_size(plugin, adjW, adjH);
+                                }
+                                cachedUIWidth = adjW;
+                                cachedUIHeight = adjH;
+                            }
+                        };
+
+                        isFloatingUI = false;
+                        isUIOpenFlag = true;
+                        idleUI();
+                        return true;
+                    }
+                }
+                windowHost->close();
+            }
+            windowHost.reset();
+            if (guiExt->destroy) guiExt->destroy(plugin);
+        }
+    }
+
+    // Fallback to floating window if plugin supports it
+    const char* floatApi = nullptr;
+    bool canFloat = false;
+    if (guiExt->is_api_supported) {
+        if (guiExt->is_api_supported(plugin, CLAP_WINDOW_API_X11, true)) {
+            floatApi = CLAP_WINDOW_API_X11;
+            canFloat = true;
+        } else if (guiExt->is_api_supported(plugin, "", true)) {
+            floatApi = "";
+            canFloat = true;
+        } else if (guiExt->is_api_supported(plugin, nullptr, true)) {
+            floatApi = nullptr;
+            canFloat = true;
+        }
+    }
 
     if (canFloat) {
-        if (!guiExt->create(plugin, nullptr, true)) return false;
+        if (!guiExt->create(plugin, floatApi, true)) return false;
         if (parentWindow != 0 && guiExt->set_transient) {
-            clap_window_t trans;
+            clap_window_t trans{};
             trans.api = CLAP_WINDOW_API_X11;
             trans.x11 = static_cast<clap_xwnd>(parentWindow);
             guiExt->set_transient(plugin, &trans);
@@ -515,53 +865,7 @@ bool ClapPlugin::openUI(uintptr_t parentWindow) {
         }
         isFloatingUI = true;
         isUIOpenFlag = true;
-        return true;
-    }
-
-    if (canX11) {
-        if (!guiExt->create(plugin, CLAP_WINDOW_API_X11, false)) return false;
-        uint32_t width = 800, height = 600;
-        if (guiExt->get_size) {
-            guiExt->get_size(plugin, &width, &height);
-        }
-        const bool canResize = guiExt->can_resize ? guiExt->can_resize(plugin) : false;
-
-        windowHost = std::make_unique<PluginWindowX11>();
-        if (!windowHost->open(pluginName, width, height, parentWindow, canResize)) {
-            guiExt->destroy(plugin);
-            windowHost.reset();
-            return false;
-        }
-
-        clap_window_t win;
-        win.api = CLAP_WINDOW_API_X11;
-        win.x11 = static_cast<clap_xwnd>(windowHost->getWindowHandle());
-
-        if (guiExt->set_parent && !guiExt->set_parent(plugin, &win)) {
-            windowHost->close();
-            windowHost.reset();
-            guiExt->destroy(plugin);
-            return false;
-        }
-
-        if (guiExt->show && !guiExt->show(plugin)) {
-            windowHost->close();
-            windowHost.reset();
-            guiExt->destroy(plugin);
-            return false;
-        }
-
-        windowHost->onClose = [this]() {
-            closeUI();
-        };
-        windowHost->onResize = [this](uint32_t w, uint32_t h) {
-            if (guiExt && guiExt->set_size) {
-                guiExt->set_size(plugin, w, h);
-            }
-        };
-
-        isFloatingUI = false;
-        isUIOpenFlag = true;
+        idleUI();
         return true;
     }
 
@@ -570,16 +874,25 @@ bool ClapPlugin::openUI(uintptr_t parentWindow) {
 
 void ClapPlugin::closeUI() {
     if (!isUIOpenFlag) return;
+    isUIOpenFlag = false;
     if (plugin && guiExt) {
-        if (guiExt->hide) guiExt->hide(plugin);
-        if (guiExt->destroy) guiExt->destroy(plugin);
+        if (!uiDestroyedByPlugin.load(std::memory_order_acquire) && guiExt->hide) {
+            guiExt->hide(plugin);
+        }
+        if (guiExt->destroy) {
+            guiExt->destroy(plugin);
+        }
     }
     if (windowHost) {
+        windowHost->onClose = nullptr;
+        windowHost->onResize = nullptr;
         windowHost->close();
         windowHost.reset();
     }
-    isUIOpenFlag = false;
+    timers.clear();
     isFloatingUI = false;
+    uiClosedByPlugin.store(false, std::memory_order_release);
+    uiDestroyedByPlugin.store(false, std::memory_order_release);
 }
 
 bool ClapPlugin::isUIOpen() const {
@@ -587,24 +900,95 @@ bool ClapPlugin::isUIOpen() const {
 }
 
 void ClapPlugin::idleUI() {
+    if (!plugin) return;
+
+    if (callbackRequested.exchange(false, std::memory_order_acq_rel)) {
+        if (plugin->on_main_thread) {
+            plugin->on_main_thread(plugin);
+        }
+    }
+
+    if (flushRequested.exchange(false, std::memory_order_acq_rel)) {
+        if (!isActivated) {
+            onHostParamFlush();
+        }
+    }
+
+    if (uiClosedByPlugin.exchange(false, std::memory_order_acq_rel)) {
+        closeUI();
+        return;
+    }
+
+    if (!isUIOpenFlag) return;
+
+    // Fire registered CLAP timers
+    if (timerExt && timerExt->on_timer && !timers.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        // Copy timer IDs to fire in case on_timer modifies the timer list
+        std::vector<clap_id> toFire;
+        for (auto& t : timers) {
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - t.lastFired).count();
+            if (elapsedMs >= static_cast<long long>(t.periodMs)) {
+                t.lastFired = now;
+                toFire.push_back(t.id);
+            }
+        }
+        for (clap_id tid : toFire) {
+            if (!isUIOpenFlag) break;
+            timerExt->on_timer(plugin, tid);
+        }
+    }
+
+#if defined(__linux__) || defined(__APPLE__)
+    // Poll registered POSIX file descriptors
+    if (posixFdExt && posixFdExt->on_fd && !posixFds.empty()) {
+        std::vector<RegisteredFd> fdsCopy = posixFds;
+        for (const auto& rfd : fdsCopy) {
+            if (!isUIOpenFlag) break;
+            struct pollfd pfd{};
+            pfd.fd = rfd.fd;
+            if (rfd.flags & CLAP_POSIX_FD_READ)  pfd.events |= POLLIN;
+            if (rfd.flags & CLAP_POSIX_FD_WRITE) pfd.events |= POLLOUT;
+            if (rfd.flags & CLAP_POSIX_FD_ERROR) pfd.events |= POLLERR;
+            if (poll(&pfd, 1, 0) > 0 && pfd.revents != 0) {
+                clap_posix_fd_flags_t rev = 0;
+                if (pfd.revents & POLLIN)  rev |= CLAP_POSIX_FD_READ;
+                if (pfd.revents & POLLOUT) rev |= CLAP_POSIX_FD_WRITE;
+                if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) rev |= CLAP_POSIX_FD_ERROR;
+                if (rev != 0) {
+                    posixFdExt->on_fd(plugin, rfd.fd, rev);
+                }
+            }
+        }
+    }
+#endif
+
     if (windowHost) {
         windowHost->idle();
     }
+
+    refreshParamValuesFromPlugin();
 }
 
 void ClapPlugin::getUISize(uint32_t& width, uint32_t& height) const {
-    width = 0; height = 0;
-    if (plugin && guiExt && guiExt->get_size) {
+    width = cachedUIWidth;
+    height = cachedUIHeight;
+    if (plugin && guiExt && guiExt->get_size && isUIOpenFlag) {
         guiExt->get_size(plugin, &width, &height);
     }
 }
 
 bool ClapPlugin::resizeUI(uint32_t width, uint32_t height) {
-    if (!plugin || !guiExt || !guiExt->set_size) return false;
+    if (!plugin || !guiExt) return false;
+    cachedUIWidth = width;
+    cachedUIHeight = height;
     if (windowHost) {
         windowHost->setSize(width, height);
     }
-    return guiExt->set_size(plugin, width, height);
+    if (guiExt->set_size) {
+        return guiExt->set_size(plugin, width, height);
+    }
+    return true;
 }
 
 } // namespace ampforge
