@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 #if defined(__linux__) || defined(__APPLE__)
 # include <dlfcn.h>
@@ -71,11 +75,30 @@ private:
         double value;
     };
 
+    struct RegisteredTimer {
+        clap_id id = 0;
+        uint32_t periodMs = 30;
+        std::chrono::steady_clock::time_point lastFired{};
+    };
+
+    struct RegisteredFd {
+        int fd = -1;
+        clap_posix_fd_flags_t flags = 0;
+    };
+
     std::string pluginPath;
     std::string pluginId;
     std::string pluginName;
     std::string vendorName;
     std::string lastError;
+
+    clap_host_t hostInstance{};
+    std::thread::id mainThreadId;
+    std::atomic<bool> inAudioThread{false};
+    std::atomic<bool> callbackRequested{false};
+    std::atomic<bool> flushRequested{false};
+    std::atomic<bool> uiClosedByPlugin{false};
+    std::atomic<bool> uiDestroyedByPlugin{false};
 
     void* libraryHandle = nullptr;
     const clap_plugin_entry_t* entry = nullptr;
@@ -86,10 +109,18 @@ private:
     const clap_plugin_latency_t* latencyExt = nullptr;
     const clap_plugin_state_t* stateExt = nullptr;
     const clap_plugin_gui_t* guiExt = nullptr;
+    const clap_plugin_timer_support_t* timerExt = nullptr;
+    const clap_plugin_posix_fd_support_t* posixFdExt = nullptr;
 
     std::unique_ptr<PluginWindowX11> windowHost;
     bool isUIOpenFlag = false;
     bool isFloatingUI = false;
+    uint32_t cachedUIWidth = 800;
+    uint32_t cachedUIHeight = 600;
+
+    std::vector<RegisteredTimer> timers;
+    clap_id nextTimerId = 1;
+    std::vector<RegisteredFd> posixFds;
 
     double activeSampleRate = 44100.0;
     uint32_t activeMaxBlock = 2048;
@@ -99,6 +130,7 @@ private:
     uint32_t outChannels = 1;
 
     std::vector<ParamDesc> parameters;
+    mutable std::mutex pendingChangesMutex;
     std::vector<QueuedParamChange> pendingChanges;
 
     std::vector<float> inChannelL;
@@ -107,6 +139,23 @@ private:
     std::vector<float> outChannelR;
 
     void initHost();
+    void refreshParamValuesFromPlugin();
+    void handleOutputEvent(const clap_event_header_t* event);
+    bool onHostRequestResize(uint32_t width, uint32_t height);
+    void onHostGuiClosed(bool wasDestroyed);
+    bool onHostRegisterTimer(uint32_t periodMs, clap_id* timerId);
+    bool onHostUnregisterTimer(clap_id timerId);
+    bool onHostRegisterFd(int fd, clap_posix_fd_flags_t flags);
+    bool onHostModifyFd(int fd, clap_posix_fd_flags_t flags);
+    bool onHostUnregisterFd(int fd);
+    void onHostParamRescan(clap_param_rescan_flags flags);
+    void onHostParamFlush();
+
+    static const void* hostGetExtension(const clap_host_t* host, const char* extensionId);
+    static void hostRequestRestart(const clap_host_t* host);
+    static void hostRequestProcess(const clap_host_t* host);
+    static void hostRequestCallback(const clap_host_t* host);
+    static bool outputEventsTryPush(const clap_output_events* list, const clap_event_header_t* event);
 };
 
 } // namespace ampforge

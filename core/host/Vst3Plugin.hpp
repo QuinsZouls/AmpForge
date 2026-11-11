@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <mutex>
+#include <chrono>
 
 #include <pluginterfaces/base/funknown.h>
 #include <pluginterfaces/base/ipluginbase.h>
@@ -13,11 +15,18 @@
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstparameterchanges.h>
+#include <pluginterfaces/vst/ivsthostapplication.h>
+#include <pluginterfaces/vst/ivstmessage.h>
+#include <pluginterfaces/vst/ivstattributes.h>
 #include <pluginterfaces/gui/iplugview.h>
 
 namespace ampforge {
 
-class Vst3Plugin : public HostedPlugin, public Steinberg::IPlugFrame {
+class Vst3Plugin : public HostedPlugin,
+                   public Steinberg::IPlugFrame,
+                   public Steinberg::Linux::IRunLoop,
+                   public Steinberg::Vst::IHostApplication,
+                   public Steinberg::Vst::IComponentHandler {
 public:
     Vst3Plugin();
     ~Vst3Plugin() override;
@@ -57,7 +66,26 @@ public:
     // Steinberg::IPlugFrame
     Steinberg::tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
 
-    // Steinberg::FUnknown (for IPlugFrame)
+    // Steinberg::Linux::IRunLoop
+    Steinberg::tresult PLUGIN_API registerEventHandler(Steinberg::Linux::IEventHandler* handler,
+                                                       Steinberg::Linux::FileDescriptor fd) override;
+    Steinberg::tresult PLUGIN_API unregisterEventHandler(Steinberg::Linux::IEventHandler* handler) override;
+    Steinberg::tresult PLUGIN_API registerTimer(Steinberg::Linux::ITimerHandler* handler,
+                                                Steinberg::Linux::TimerInterval milliseconds) override;
+    Steinberg::tresult PLUGIN_API unregisterTimer(Steinberg::Linux::ITimerHandler* handler) override;
+
+    // Steinberg::Vst::IHostApplication
+    Steinberg::tresult PLUGIN_API getName(Steinberg::Vst::String128 name) override;
+    Steinberg::tresult PLUGIN_API createInstance(Steinberg::TUID cid, Steinberg::TUID _iid, void** obj) override;
+
+    // Steinberg::Vst::IComponentHandler
+    Steinberg::tresult PLUGIN_API beginEdit(Steinberg::Vst::ParamID id) override;
+    Steinberg::tresult PLUGIN_API performEdit(Steinberg::Vst::ParamID id,
+                                              Steinberg::Vst::ParamValue valueNormalized) override;
+    Steinberg::tresult PLUGIN_API endEdit(Steinberg::Vst::ParamID id) override;
+    Steinberg::tresult PLUGIN_API restartComponent(Steinberg::int32 flags) override;
+
+    // Steinberg::FUnknown
     Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID iid, void** obj) override;
     Steinberg::uint32 PLUGIN_API addRef() override { return 1; }
     Steinberg::uint32 PLUGIN_API release() override { return 1; }
@@ -75,6 +103,7 @@ private:
         float maxValue = 1.0f;
         float defaultValue = 0.0f;
         float currentValue = 0.0f;
+        int32_t stepCount = 0;
         bool isInteger = false;
         bool isBoolean = false;
     };
@@ -82,6 +111,17 @@ private:
     struct QueuedParam {
         Steinberg::Vst::ParamID id = 0;
         double normalizedValue = 0.0;
+    };
+
+    struct RunLoopTimer {
+        Steinberg::Linux::ITimerHandler* handler = nullptr;
+        uint64_t intervalMs = 30;
+        std::chrono::steady_clock::time_point lastFired{};
+    };
+
+    struct RunLoopEventHandler {
+        Steinberg::Linux::IEventHandler* handler = nullptr;
+        Steinberg::Linux::FileDescriptor fd = -1;
     };
 
     std::string pluginPath;
@@ -95,9 +135,17 @@ private:
     Steinberg::Vst::IComponent* component = nullptr;
     Steinberg::Vst::IAudioProcessor* processor = nullptr;
     Steinberg::Vst::IEditController* controller = nullptr;
+    Steinberg::Vst::IConnectionPoint* compConnPoint = nullptr;
+    Steinberg::Vst::IConnectionPoint* ctrlConnPoint = nullptr;
+    bool separateController = false;
+
     Steinberg::IPlugView* plugView = nullptr;
     std::unique_ptr<PluginWindowX11> windowHost;
     bool isUIOpenFlag = false;
+    mutable int hasCustomUICache = -1;
+
+    std::vector<RunLoopTimer> runLoopTimers;
+    std::vector<RunLoopEventHandler> runLoopEventHandlers;
 
     double activeSampleRate = 44100.0;
     uint32_t activeMaxBlock = 2048;
@@ -107,6 +155,7 @@ private:
     uint32_t outBusChannels = 1;
 
     std::vector<Vst3Param> parameters;
+    mutable std::mutex queuedParamsMutex;
     std::vector<QueuedParam> queuedParams;
 
     std::vector<float> inChannelL;
@@ -115,6 +164,7 @@ private:
     std::vector<float> outChannelR;
 
     void discoverParameters();
+    void syncControllerParamsToHost();
 };
 
 } // namespace ampforge

@@ -9,6 +9,9 @@
 # include <X11/Xlib.h>
 # include <X11/Xutil.h>
 # include <X11/Xatom.h>
+# undef Bool
+# undef None
+# undef Status
 #endif
 
 namespace ampforge {
@@ -26,6 +29,9 @@ public:
 
     void setTitle(const std::string& title);
     void setSize(uint32_t width, uint32_t height);
+    bool syncSizeFromChild();
+    uint32_t getWidth() const { return currentWidth; }
+    uint32_t getHeight() const { return currentHeight; }
     void idle();
 
     std::function<void()> onClose;

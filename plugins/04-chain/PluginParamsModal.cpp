@@ -355,12 +355,12 @@ void PluginParamsModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heigh
         vg->textAlign(ALIGN_LEFT | ALIGN_MIDDLE);
         vg->text(rightX, rightY + 26.0f, "Bidirectionally mapped with rack knobs & DSP", nullptr);
 
-        // Display up to 5 primary controls (or mapped macro parameters)
+        // Display all controls (prioritizing mapped macro parameters, then remaining non-bypass controls)
         std::vector<size_t> displayIndices;
         for (size_t i = 0; i < rows.size(); ++i) {
             if (rows[i].mappedMacro >= 0) displayIndices.push_back(i);
         }
-        for (size_t i = 0; i < rows.size() && displayIndices.size() < 5; ++i) {
+        for (size_t i = 0; i < rows.size(); ++i) {
             if (std::find(displayIndices.begin(), displayIndices.end(), i) == displayIndices.end()) {
                 std::string lower = rows[i].info.name;
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
@@ -370,9 +370,19 @@ void PluginParamsModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heigh
             }
         }
 
-        float cardY = rightY + 42.0f;
+        const float cardsTopY = rightY + 42.0f;
+        const float cardsViewH = pedalH - 42.0f;
         const float cardH = 68.0f;
+        float cardY = cardsTopY + scrollY;
+
+        vg->save();
+        vg->scissor(rightX, cardsTopY, rightW, cardsViewH);
+
         for (size_t idx : displayIndices) {
+            if (cardY + cardH < cardsTopY || cardY > cardsTopY + cardsViewH) {
+                cardY += cardH + 8.0f;
+                continue;
+            }
             auto& r = rows[idx];
 
             vg->beginPath();
@@ -460,6 +470,7 @@ void PluginParamsModal::draw(DGL_NAMESPACE::NanoVG* vg, float width, float heigh
 
             cardY += cardH + 8.0f;
         }
+        vg->restore();
 
     } else {
         // --- STANDARD / FULL PARAMETER TABLE VIEW ---
@@ -627,10 +638,12 @@ bool PluginParamsModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
 
             if (pointInRect(lastMouseX, lastMouseY, guiBtnX, btnY, btnW, btnH)) {
                 showPedalView = true;
+                scrollY = 0.0f;
                 return true;
             }
             if (pointInRect(lastMouseX, lastMouseY, ctrlBtnX, btnY, btnW, btnH)) {
                 showPedalView = false;
+                scrollY = 0.0f;
                 return true;
             }
         }
@@ -654,7 +667,7 @@ bool PluginParamsModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
                 for (size_t i = 0; i < rows.size(); ++i) {
                     if (rows[i].mappedMacro >= 0) displayIndices.push_back(i);
                 }
-                for (size_t i = 0; i < rows.size() && displayIndices.size() < 5; ++i) {
+                for (size_t i = 0; i < rows.size(); ++i) {
                     if (std::find(displayIndices.begin(), displayIndices.end(), i) == displayIndices.end()) {
                         std::string lower = rows[i].info.name;
                         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
@@ -664,9 +677,15 @@ bool PluginParamsModal::onMouse(const DGL_NAMESPACE::Widget::MouseEvent& ev) {
                     }
                 }
 
-                float cardY = rightY + 42.0f;
+                const float cardsTopY = rightY + 42.0f;
+                const float cardsViewH = (listH - 24.0f) - 42.0f;
+                float cardY = cardsTopY + scrollY;
                 const float cardH = 68.0f;
                 for (size_t idx : displayIndices) {
+                    if (cardY + cardH < cardsTopY || cardY > cardsTopY + cardsViewH) {
+                        cardY += cardH + 8.0f;
+                        continue;
+                    }
                     auto& r = rows[idx];
 
                     // Chip click (cycles scale points)
@@ -867,7 +886,7 @@ bool PluginParamsModal::onMotion(const DGL_NAMESPACE::Widget::MotionEvent& ev) {
 }
 
 bool PluginParamsModal::onScroll(const DGL_NAMESPACE::Widget::ScrollEvent& ev) {
-    if (!openFlag || showPedalView) return false;
+    if (!openFlag) return false;
 
     const float boxX = (lastWidth - kModalW) * 0.5f;
     const float boxY = (lastHeight - kModalH) * 0.5f;
@@ -878,6 +897,14 @@ bool PluginParamsModal::onScroll(const DGL_NAMESPACE::Widget::ScrollEvent& ev) {
 
     if (!pointInRect(lastMouseX, lastMouseY, listX, listY, listW, listH)) {
         return false;
+    }
+
+    if (showPedalView && isMod && !modScreenshotPath.empty()) {
+        const float cardsViewH = (listH - 24.0f) - 42.0f;
+        const float totalH = static_cast<float>(rows.size()) * 76.0f;
+        const float maxScroll = std::min(0.0f, cardsViewH - totalH);
+        scrollY = std::clamp(scrollY + static_cast<float>(ev.delta.getY()) * 30.0f, maxScroll, 0.0f);
+        return true;
     }
 
     const float totalH = static_cast<float>(rows.size()) * kRowH;
