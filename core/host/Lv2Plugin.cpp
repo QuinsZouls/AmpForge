@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace ampforge {
 
@@ -207,6 +208,68 @@ private:
     }
 };
 #endif
+
+// Locale-independent, allocation-free numeric formatting for the audio
+// thread. snprintf("%f") is not guaranteed RT-safe (glibc's locale machinery
+// can allocate) and follows the process locale: gtk_init() - which the MOD
+// WebKit UI path calls - does setlocale(LC_ALL, ""), so "%f" would emit "0,5"
+// in e.g. a Spanish locale and break the modgui JSON. These writers always
+// emit '.' and never touch locale or the heap.
+//
+// formatFloatFixed6: fixed 6 decimals, like %f. Non-finite values and
+// |v| >= 1e12 format as "0.000000": control/meter values are nowhere near
+// that range, and int64 scaled math stays exact below it (1e12 * 1e6 = 1e18
+// < 9.2e18). Returns the length written (always < cap, NUL-terminated).
+static uint32_t formatFloatFixed6(char* dst, uint32_t cap, float value) {
+    if (cap == 0) return 0;
+    double v = static_cast<double>(value);
+    if (!(v == v) || v >= 1e12 || v <= -1e12) v = 0.0;  // NaN/Inf/out of range
+    const bool neg = v < 0.0;
+    if (neg) v = -v;
+    const uint64_t scaled = static_cast<uint64_t>(v * 1e6 + 0.5);
+    uint64_t ip = scaled / 1000000u;
+    uint32_t fp = static_cast<uint32_t>(scaled % 1000000u);
+
+    char tmp[32];  // sign + 13 int digits + '.' + 6 decimals + NUL fits
+    uint32_t n = 0;
+    if (neg) tmp[n++] = '-';
+    char digits[24];
+    uint32_t d = 0;
+    do { digits[d++] = static_cast<char>('0' + ip % 10); ip /= 10; } while (ip != 0);
+    while (d != 0) tmp[n++] = digits[--d];
+    tmp[n++] = '.';
+    uint32_t divisor = 100000;
+    for (int i = 0; i < 6; ++i) {
+        tmp[n++] = static_cast<char>('0' + (fp / divisor) % 10);
+        divisor /= 10;
+    }
+    if (n >= cap) n = cap - 1;  // defensive; cap is 256, max output 21
+    std::memcpy(dst, tmp, n);
+    dst[n] = '\0';
+    return n;
+}
+
+// formatInt32: plain decimal, INT32_MIN safe (negate in int64). Same contract.
+static uint32_t formatInt32(char* dst, uint32_t cap, int32_t value) {
+    if (cap == 0) return 0;
+    char tmp[16];  // sign + 10 digits + NUL fits
+    uint32_t n = 0;
+    uint32_t uv;
+    if (value < 0) {
+        tmp[n++] = '-';
+        uv = static_cast<uint32_t>(-static_cast<int64_t>(value));
+    } else {
+        uv = static_cast<uint32_t>(value);
+    }
+    char digits[12];
+    uint32_t d = 0;
+    do { digits[d++] = static_cast<char>('0' + uv % 10); uv /= 10; } while (uv != 0);
+    while (d != 0) tmp[n++] = digits[--d];
+    if (n >= cap) n = cap - 1;
+    std::memcpy(dst, tmp, n);
+    dst[n] = '\0';
+    return n;
+}
 
 } // namespace
 
@@ -1008,6 +1071,9 @@ bool Lv2Plugin::activate(double sampleRate, uint32_t maxBlockSize) {
     atomOutBuffers.resize(atomOutPorts.size());
     for (auto& buf : atomOutBuffers) initAtomSequence(buf, true);
 
+    // Pre-reserve the injection scratch (audio-thread-only, see member doc).
+    dspEventScratch.assign(kAtomBufferBytes, 0);
+
     // Instantiate plugin, handing it a real feature list. Two failure modes were
     // measured with nullptr here: plugins that hard-require urid:map or
     // opts:options refused to instantiate (a plain load failure), while plugins
@@ -1015,6 +1081,24 @@ bool Lv2Plugin::activate(double sampleRate, uint32_t maxBlockSize) {
     // 512-frame internal block - which became the user-visible distortion once
     // the host handed them 1024 frames.
     buildHostFeatures(activeSampleRate);
+
+    // Resolve every URID processBlock() needs here, on the non-RT side: the
+    // audio thread must never call into the URID map (mutex + allocation).
+    cachedUrids.atomObject   = mapUrid(LV2_ATOM__Object);
+    cachedUrids.atomBlank    = mapUrid(LV2_ATOM__Blank);
+    cachedUrids.atomString   = mapUrid(LV2_ATOM__String);
+    cachedUrids.atomPath     = mapUrid(LV2_ATOM__Path);
+    cachedUrids.atomUri      = mapUrid(LV2_ATOM__URI);
+    cachedUrids.atomFloat    = mapUrid(LV2_ATOM__Float);
+    cachedUrids.atomInt      = mapUrid(LV2_ATOM__Int);
+    cachedUrids.atomBool     = mapUrid(LV2_ATOM__Bool);
+    cachedUrids.atomUridType = mapUrid(LV2_ATOM__URID);
+    cachedUrids.patchSet     = mapUrid(LV2_PATCH__Set);
+    cachedUrids.patchProp    = mapUrid(LV2_PATCH__property);
+    cachedUrids.patchVal     = mapUrid(LV2_PATCH__value);
+    cachedUrids.eventXfer    = mapUrid("http://lv2plug.in/ns/ext/atom#eventTransfer");
+    cachedUrids.atomTransfer = mapUrid("http://lv2plug.in/ns/ext/atom#atomTransfer");
+
     instance = syms.plugin_instantiate(plugin, activeSampleRate, features.data());
     if (!instance || !instance->lv2_descriptor) {
         lastError = "Failed to instantiate LV2 plugin (missing required feature?): " + pluginUri;
@@ -1165,19 +1249,19 @@ void Lv2Plugin::processBlock(const float* in, float* out, uint32_t frames) {
         return;
     }
 
-    const LV2_URID atomObjectUrid = mapUrid(LV2_ATOM__Object);
-    const LV2_URID atomBlankUrid  = mapUrid(LV2_ATOM__Blank);
-    const LV2_URID atomStringUrid = mapUrid(LV2_ATOM__String);
-    const LV2_URID atomPathUrid   = mapUrid(LV2_ATOM__Path);
-    const LV2_URID atomUriUrid    = mapUrid(LV2_ATOM__URI);
-    const LV2_URID atomFloatUrid  = mapUrid(LV2_ATOM__Float);
-    const LV2_URID atomIntUrid    = mapUrid(LV2_ATOM__Int);
-    const LV2_URID atomBoolUrid   = mapUrid(LV2_ATOM__Bool);
-    const LV2_URID atomUridType   = mapUrid(LV2_ATOM__URID);
-    const LV2_URID patchSetUrid   = mapUrid(LV2_PATCH__Set);
-    const LV2_URID patchPropUrid  = mapUrid(LV2_PATCH__property);
-    const LV2_URID patchValUrid   = mapUrid(LV2_PATCH__value);
-    const LV2_URID eventXferUrid  = mapUrid("http://lv2plug.in/ns/ext/atom#eventTransfer");
+    // Pre-resolved in activate(): no URID-map calls on the audio thread.
+    const LV2_URID atomObjectUrid = cachedUrids.atomObject;
+    const LV2_URID atomBlankUrid  = cachedUrids.atomBlank;
+    const LV2_URID atomStringUrid = cachedUrids.atomString;
+    const LV2_URID atomPathUrid   = cachedUrids.atomPath;
+    const LV2_URID atomUriUrid    = cachedUrids.atomUri;
+    const LV2_URID atomFloatUrid  = cachedUrids.atomFloat;
+    const LV2_URID atomIntUrid    = cachedUrids.atomInt;
+    const LV2_URID atomBoolUrid   = cachedUrids.atomBool;
+    const LV2_URID atomUridType   = cachedUrids.atomUridType;
+    const LV2_URID patchSetUrid   = cachedUrids.patchSet;
+    const LV2_URID patchPropUrid  = cachedUrids.patchProp;
+    const LV2_URID patchValUrid   = cachedUrids.patchVal;
 
     // `inBuffers`/`outBuffers` are sized `activeMaxBlock` >= chunkMax, so the
     // chunks never allocate or resize on the audio thread.
@@ -1206,31 +1290,53 @@ void Lv2Plugin::processBlock(const float* in, float* out, uint32_t frames) {
             lv2_atom_sequence_clear(reinterpret_cast<LV2_Atom_Sequence*>(buf.data()));
         }
         if (offset == 0 && !atomInBuffers.empty()) {
-            std::unique_lock<std::mutex> lock(atomEventMutex, std::try_to_lock);
-            if (lock.owns_lock() && !pendingDspAtomEvents.empty()) {
-                const uint32_t inCapacity = kAtomBufferBytes - sizeof(LV2_Atom);
-                for (const auto& qev : pendingDspAtomEvents) {
-                    if (qev.bytes.size() < sizeof(LV2_Atom)) continue;
-                    size_t targetBufIdx = 0;
-                    for (size_t ai = 0; ai < atomInPorts.size(); ++ai) {
-                        if (atomInPorts[ai] == qev.portIndex) {
-                            targetBufIdx = ai;
-                            break;
-                        }
-                    }
-                    auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomInBuffers[targetBufIdx].data());
-                    const auto* srcAtom = reinterpret_cast<const LV2_Atom*>(qev.bytes.data());
-                    const uint32_t totalAtomBytes = sizeof(LV2_Atom) + srcAtom->size;
-                    if (totalAtomBytes <= qev.bytes.size() &&
-                        sizeof(LV2_Atom_Event) + srcAtom->size <= inCapacity) {
-                        std::vector<uint8_t> evBuf(sizeof(LV2_Atom_Event) + srcAtom->size, 0);
-                        auto* ev = reinterpret_cast<LV2_Atom_Event*>(evBuf.data());
-                        ev->time.frames = 0;
-                        std::memcpy(&ev->body, qev.bytes.data(), totalAtomBytes);
-                        lv2_atom_sequence_append_event(seq, inCapacity, ev);
+            // Lock-free drain of the UI->DSP ring: the audio thread is the
+            // only consumer, so no try-lock (events are no longer skipped
+            // for a block just because the UI happens to be pushing one).
+            const uint32_t inCapacity = kAtomBufferBytes - sizeof(LV2_Atom);
+            DspAtomEventSlot qev;
+            while (pendingDspAtomEvents.pop(qev)) {
+                // Every rejection is counted (relaxed fetch_add is RT-safe):
+                // "the UI event I sent never arrived" must be diagnosable.
+                if (qev.size < sizeof(LV2_Atom)) {
+                    droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                size_t targetBufIdx = atomInPorts.size();  // sentinel: not found
+                for (size_t ai = 0; ai < atomInPorts.size(); ++ai) {
+                    if (atomInPorts[ai] == qev.portIndex) {
+                        targetBufIdx = ai;
+                        break;
                     }
                 }
-                pendingDspAtomEvents.clear();
+                // An event for a port we did not classify as an atom input is
+                // dropped, not delivered to port 0 (the old fall-through).
+                if (targetBufIdx == atomInPorts.size()) {
+                    droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomInBuffers[targetBufIdx].data());
+                const auto* srcAtom = reinterpret_cast<const LV2_Atom*>(qev.bytes);
+                const uint32_t totalAtomBytes = sizeof(LV2_Atom) + srcAtom->size;
+                // qev.size >= sizeof(LV2_Atom) was checked above; subtracting
+                // first keeps the comparison in uint32 without wrapping, and
+                // the size_t sum below cannot wrap on any platform we target.
+                // The inCapacity clause subsumes the scratch bound: the scratch
+                // is kAtomBufferBytes, strictly larger than inCapacity.
+                if (srcAtom->size <= qev.size - sizeof(LV2_Atom) &&
+                    sizeof(LV2_Atom_Event) + srcAtom->size <= inCapacity) {
+                    // Build the event in the pre-reserved scratch instead of
+                    // a per-event heap vector: no allocation on this thread.
+                    auto* ev = reinterpret_cast<LV2_Atom_Event*>(dspEventScratch.data());
+                    // The scratch is reused across events: zero the time union
+                    // (frames and beats share storage); the memcpy below writes
+                    // the whole atom header and payload.
+                    ev->time.frames = 0;
+                    std::memcpy(&ev->body, qev.bytes, totalAtomBytes);
+                    lv2_atom_sequence_append_event(seq, inCapacity, ev);
+                } else {
+                    droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+                }
             }
         }
         for (auto& buf : atomOutBuffers) {
@@ -1243,29 +1349,48 @@ void Lv2Plugin::processBlock(const float* in, float* out, uint32_t frames) {
         instance->lv2_descriptor->run(instance->lv2_handle, n);
 
         // Clamp and harvest atom output sequences when UI is open
+        // Reused for every event in this block: no per-event construction, no
+        // allocation, no lock (the rings are SPSC).
+        UiAtomEventSlot slot;
+        PatchNotificationSlot note;
         for (size_t p = 0; p < atomOutBuffers.size(); ++p) {
             auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomOutBuffers[p].data());
             const uint32_t capacity = kAtomBufferBytes - sizeof(LV2_Atom);
             if (seq->atom.size > capacity) seq->atom.size = capacity;
 
-            if (uiOpen && seq->atom.size > sizeof(LV2_Atom_Sequence_Body)) {
-                std::unique_lock<std::mutex> lock(atomEventMutex, std::try_to_lock);
-                if (lock.owns_lock()) {
-                    LV2_ATOM_SEQUENCE_FOREACH(seq, ev) {
-                        if (ev->body.size == 0) continue;
-                        const uint32_t totalSize = sizeof(LV2_Atom) + ev->body.size;
-                        const uint8_t* seqEnd = atomOutBuffers[p].data() + sizeof(LV2_Atom) + seq->atom.size;
-                        if (reinterpret_cast<const uint8_t*>(&ev->body) + totalSize > seqEnd) break;
+            // The only UI state this thread reads: the two attach flags (see
+            // their member docs). uiDescriptor is deliberately NOT read here -
+            // the UI drain side checks it, and closeUI() may dlclose it.
+            const bool uiSink = nativeUiAttached.load(std::memory_order_acquire);
+            const bool patchSink = patchSinkOpen.load(std::memory_order_acquire);
+            if ((uiSink || patchSink) && seq->atom.size > sizeof(LV2_Atom_Sequence_Body)) {
+                LV2_ATOM_SEQUENCE_FOREACH(seq, ev) {
+                    if (ev->body.size == 0) continue;
+                    const uint32_t totalSize = sizeof(LV2_Atom) + ev->body.size;
+                    const uint8_t* seqEnd = atomOutBuffers[p].data() + sizeof(LV2_Atom) + seq->atom.size;
+                    if (reinterpret_cast<const uint8_t*>(&ev->body) + totalSize > seqEnd) break;
 
-                        if (uiDescriptor && uiDescriptor->port_event) {
-                            QueuedAtomEvent outEv;
-                            outEv.portIndex = atomOutPorts[p];
-                            outEv.protocol = eventXferUrid;
-                            outEv.bytes.resize(totalSize);
-                            std::memcpy(outEv.bytes.data(), &ev->body, totalSize);
-                            pendingUiAtomEvents.push_back(std::move(outEv));
+                    if (uiSink) {
+                        if (totalSize <= sizeof(slot.bytes)) {
+                            slot.portIndex = atomOutPorts[p];
+                            // eventTransfer, the format native UIs expect for
+                            // atom payloads. 0 would mean "control port, one
+                            // float" to a receiver dispatching on format.
+                            slot.protocol = cachedUrids.eventXfer;
+                            slot.size = totalSize;
+                            std::memcpy(slot.bytes, &ev->body, totalSize);
+                            // Full ring (or oversized event): drop and count.
+                            // Meters are periodic; the UI drains at its idle
+                            // rate and catches up.
+                            if (!pendingUiAtomEvents.push(slot)) {
+                                droppedUiEvents.fetch_add(1, std::memory_order_relaxed);
+                            }
+                        } else {
+                            droppedUiEvents.fetch_add(1, std::memory_order_relaxed);
                         }
+                    }
 
+                    if (patchSink) {
                         if (ev->body.type == atomObjectUrid || ev->body.type == atomBlankUrid) {
                             const auto* obj = reinterpret_cast<const LV2_Atom_Object*>(&ev->body);
                             if (obj->body.otype == patchSetUrid) {
@@ -1277,33 +1402,54 @@ void Lv2Plugin::processBlock(const float* in, float* out, uint32_t frames) {
                                 }
                                 if (propAtom && valAtom && propAtom->type == atomUridType) {
                                     const LV2_URID propUrid = reinterpret_cast<const LV2_Atom_URID*>(propAtom)->body;
-                                    const char* propUri = uridUnmapFn(uridUnmap.handle, propUrid);
-                                    if (propUri && *propUri) {
-                                        std::string valStr;
-                                        if (valAtom->type == atomStringUrid ||
-                                            valAtom->type == atomPathUrid ||
-                                            valAtom->type == atomUriUrid) {
-                                            const char* cs = reinterpret_cast<const char*>(valAtom + 1);
-                                            size_t maxLen = valAtom->size > 0 ? valAtom->size - 1 : 0;
-                                            valStr.assign(cs, strnlen(cs, maxLen));
-                                        } else if (valAtom->type == atomFloatUrid && valAtom->size >= sizeof(float)) {
-                                            valStr = std::to_string(*reinterpret_cast<const float*>(valAtom + 1));
-                                        } else if ((valAtom->type == atomIntUrid || valAtom->type == atomBoolUrid) &&
-                                                   valAtom->size >= sizeof(int32_t)) {
-                                            valStr = std::to_string(*reinterpret_cast<const int32_t*>(valAtom + 1));
+                                    note.propUrid = propUrid;
+                                    note.valueLen = 0;
+                                    note.value[0] = '\0';
+                                    // An over-long value drops the whole
+                                    // notification: a truncated path persisted
+                                    // into writableParams would be worse than a
+                                    // missing update. Never truncate.
+                                    bool fits = true;
+                                    if (valAtom->type == atomStringUrid ||
+                                        valAtom->type == atomPathUrid ||
+                                        valAtom->type == atomUriUrid) {
+                                        const char* cs = reinterpret_cast<const char*>(valAtom + 1);
+                                        size_t maxLen = valAtom->size > 0 ? valAtom->size - 1 : 0;
+                                        size_t n = strnlen(cs, maxLen);
+                                        if (n >= sizeof(note.value)) {
+                                            fits = false;
+                                        } else {
+                                            std::memcpy(note.value, cs, n);
+                                            note.value[n] = '\0';
+                                            note.valueLen = static_cast<uint32_t>(n);
                                         }
-                                        // Coalesce repeated notifications for the same URI (e.g. #meters / #tuner)
-                                        bool updatedExisting = false;
-                                        for (auto& existing : pendingPatchNotifications) {
-                                            if (existing.uri == propUri) {
-                                                existing.value = valStr;
-                                                updatedExisting = true;
-                                                break;
-                                            }
+                                    } else if (valAtom->type == atomFloatUrid && valAtom->size >= sizeof(float)) {
+                                        // Locale-free, allocation-free writer (see
+                                        // formatFloatFixed6): snprintf would follow the
+                                        // process locale gtk_init() installs.
+                                        const uint32_t n = formatFloatFixed6(
+                                            note.value, sizeof(note.value),
+                                            *reinterpret_cast<const float*>(valAtom + 1));
+                                        if (n >= sizeof(note.value)) fits = false;
+                                        else note.valueLen = n;
+                                    } else if ((valAtom->type == atomIntUrid || valAtom->type == atomBoolUrid) &&
+                                               valAtom->size >= sizeof(int32_t)) {
+                                        // Same locale-free, allocation-free contract as
+                                        // the float branch above.
+                                        const uint32_t n = formatInt32(
+                                            note.value, sizeof(note.value),
+                                            *reinterpret_cast<const int32_t*>(valAtom + 1));
+                                        if (n >= sizeof(note.value)) fits = false;
+                                        else note.valueLen = n;
+                                    }
+                                    // No unmap, no string, no coalescing here: the UI
+                                    // thread resolves the URI and coalesces when it drains.
+                                    if (fits) {
+                                        if (!pendingPatchNotifications.push(note)) {
+                                            droppedPatchNotes.fetch_add(1, std::memory_order_relaxed);
                                         }
-                                        if (!updatedExisting && pendingPatchNotifications.size() < 128) {
-                                            pendingPatchNotifications.push_back({propUri, valStr});
-                                        }
+                                    } else {
+                                        droppedPatchNotes.fetch_add(1, std::memory_order_relaxed);
                                     }
                                 }
                             }
@@ -1761,6 +1907,7 @@ bool Lv2Plugin::openBinaryUI(uintptr_t parentWindow) {
 
     enqueuePatchGet();
     uiOpen = true;
+    nativeUiAttached.store(true, std::memory_order_release);
     return true;
 #else
     (void)parentWindow;
@@ -2712,6 +2859,7 @@ bool Lv2Plugin::openModWebUI() {
     uiWidth = initW;
     uiHeight = initH;
     uiOpen = true;
+    patchSinkOpen.store(true, std::memory_order_release);
 
     enqueuePatchGet();
     return true;
@@ -2740,13 +2888,17 @@ void Lv2Plugin::enqueuePatchGet(const std::string& uri) {
 
     if (msg && msg->size > 0) {
         const uint32_t totalBytes = sizeof(LV2_Atom) + msg->size;
-        if (totalBytes <= sizeof(buf)) {
-            QueuedAtomEvent qev;
-            qev.portIndex = atomInPorts[0];
-            qev.protocol = mapUrid("http://lv2plug.in/ns/ext/atom#eventTransfer");
-            qev.bytes.assign(buf, buf + totalBytes);
-            std::lock_guard<std::mutex> lock(atomEventMutex);
-            pendingDspAtomEvents.push_back(std::move(qev));
+        DspAtomEventSlot slot;
+        if (totalBytes <= kMaxDspEventBytes) {
+            slot.portIndex = atomInPorts[0];
+            slot.size = totalBytes;
+            std::memcpy(slot.bytes, buf, totalBytes);
+            std::lock_guard<std::mutex> lock(dspQueueProducerMutex);
+            if (!pendingDspAtomEvents.push(slot)) {
+                droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
         }
     }
 }
@@ -2793,18 +2945,28 @@ void Lv2Plugin::enqueuePatchSet(const std::string& uri, char valueType, const st
 
     if (msg && msg->size > 0) {
         const uint32_t totalBytes = sizeof(LV2_Atom) + msg->size;
-        if (totalBytes <= buf.size()) {
-            QueuedAtomEvent qev;
-            qev.portIndex = atomInPorts[0];
-            qev.protocol = mapUrid("http://lv2plug.in/ns/ext/atom#eventTransfer");
-            qev.bytes.assign(buf.data(), buf.data() + totalBytes);
-            std::lock_guard<std::mutex> lock(atomEventMutex);
-            pendingDspAtomEvents.push_back(std::move(qev));
+        DspAtomEventSlot slot;
+        if (totalBytes <= kMaxDspEventBytes) {
+            slot.portIndex = atomInPorts[0];
+            slot.size = totalBytes;
+            std::memcpy(slot.bytes, buf.data(), totalBytes);
+            std::lock_guard<std::mutex> lock(dspQueueProducerMutex);
+            if (!pendingDspAtomEvents.push(slot)) {
+                droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
         }
     }
 }
 
 void Lv2Plugin::closeUI() {
+    // Detach the audio thread first: after these stores the harvest stops
+    // pushing, and nothing below (cleanup, dlclose, GTK teardown) can be
+    // observed by a processBlock() that loads the flags acquire.
+    nativeUiAttached.store(false, std::memory_order_release);
+    patchSinkOpen.store(false, std::memory_order_release);
+
     if (uiExternalWidget && !uiClosedByPlugin) {
         LV2_EXTERNAL_UI_HIDE(uiExternalWidget);
     }
@@ -2960,16 +3122,13 @@ void Lv2Plugin::idleUI() {
                 }
             }
 
-            std::vector<QueuedAtomEvent> uiEvents;
-            {
-                std::lock_guard<std::mutex> lock(atomEventMutex);
-                uiEvents.swap(pendingUiAtomEvents);
-            }
-            for (const auto& ev : uiEvents) {
-                if (!ev.bytes.empty()) {
-                    uiDescriptor->port_event(uiHandle, ev.portIndex,
-                                             static_cast<uint32_t>(ev.bytes.size()),
-                                             ev.protocol, ev.bytes.data());
+            // Lock-free drain of the audio->UI ring (UI thread: the only
+            // consumer; processBlock() is the only producer).
+            UiAtomEventSlot slot;
+            while (pendingUiAtomEvents.pop(slot)) {
+                if (slot.size > 0) {
+                    uiDescriptor->port_event(uiHandle, slot.portIndex,
+                                             slot.size, slot.protocol, slot.bytes);
                 }
             }
         }
@@ -3088,22 +3247,38 @@ void Lv2Plugin::idleUI() {
             }
         }
 
-        std::vector<QueuedPatchNotification> patchNotes;
+        // Drain the lock-free audio->UI ring, resolve URIs on this (non-RT)
+        // thread and coalesce repeated notifications for the same URI,
+        // keeping the last value - the coalescing the audio side used to do.
+        std::vector<std::pair<std::string, std::string>> patchNotes;
         {
-            std::lock_guard<std::mutex> lock(atomEventMutex);
-            patchNotes.swap(pendingPatchNotifications);
+            PatchNotificationSlot note;
+            while (pendingPatchNotifications.pop(note)) {
+                const char* uri = uridUnmapFn(uridUnmap.handle, note.propUrid);
+                if (!uri || !*uri) continue;
+                std::string val(note.value, note.valueLen);
+                bool updatedExisting = false;
+                for (auto& existing : patchNotes) {
+                    if (existing.first == uri) {
+                        existing.second = std::move(val);
+                        updatedExisting = true;
+                        break;
+                    }
+                }
+                if (!updatedExisting) patchNotes.emplace_back(uri, std::move(val));
+            }
         }
         for (const auto& pn : patchNotes) {
             for (auto& wp : writableParams) {
-                if (wp.uri == pn.uri) {
-                    wp.currentValue = pn.value;
+                if (wp.uri == pn.first) {
+                    wp.currentValue = pn.second;
                     break;
                 }
             }
             if (hasItems) batch << ",";
             hasItems = true;
-            batch << "{\"uri\":\"" << jsonEscape(pn.uri)
-                  << "\",\"value\":\"" << jsonEscape(pn.value) << "\"}";
+            batch << "{\"uri\":\"" << jsonEscape(pn.first)
+                  << "\",\"value\":\"" << jsonEscape(pn.second) << "\"}";
         }
 
         batch << "]";
@@ -3179,17 +3354,34 @@ void Lv2Plugin::uiWriteFunction(LV2UI_Controller controller,
         return;
     }
 
-    const LV2_URID eventXfer = self->mapUrid("http://lv2plug.in/ns/ext/atom#eventTransfer");
-    const LV2_URID atomTransfer = self->mapUrid("http://lv2plug.in/ns/ext/atom#atomTransfer");
+    // Cached at activate(): no URID-map call (global mutex) per UI event.
+    // The cache is filled in activate(); a UI opened before activation (no
+    // in-tree caller does, but the API allows it) falls back to the map here,
+    // on the non-RT side, rather than comparing against 0 and dropping every
+    // event.
+    const LV2_URID eventXfer = self->cachedUrids.eventXfer
+        ? self->cachedUrids.eventXfer
+        : self->mapUrid("http://lv2plug.in/ns/ext/atom#eventTransfer");
+    const LV2_URID atomTransfer = self->cachedUrids.atomTransfer
+        ? self->cachedUrids.atomTransfer
+        : self->mapUrid("http://lv2plug.in/ns/ext/atom#atomTransfer");
     if ((port_protocol == eventXfer || port_protocol == atomTransfer) &&
         buffer_size >= sizeof(LV2_Atom)) {
-        QueuedAtomEvent qev;
-        qev.portIndex = port_index;
-        qev.protocol = port_protocol;
-        const auto* bytes = static_cast<const uint8_t*>(buffer);
-        qev.bytes.assign(bytes, bytes + buffer_size);
-        std::lock_guard<std::mutex> lock(self->atomEventMutex);
-        self->pendingDspAtomEvents.push_back(std::move(qev));
+        DspAtomEventSlot slot;
+        if (buffer_size <= kMaxDspEventBytes) {
+            slot.portIndex = port_index;
+            slot.size = buffer_size;
+            std::memcpy(slot.bytes, buffer, buffer_size);
+            // Producer-side lock only (UI thread); the audio consumer is
+            // lock-free. Oversized or full-ring events are dropped and counted
+            // - see DspAtomEventSlot and the drop counters.
+            std::lock_guard<std::mutex> lock(self->dspQueueProducerMutex);
+            if (!self->pendingDspAtomEvents.push(slot)) {
+                self->droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            self->droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 

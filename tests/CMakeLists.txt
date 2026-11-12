@@ -23,6 +23,7 @@ add_executable(ampforge_tests
     test_lv2_host.cpp
     test_lv2_chunk_host.cpp
     test_lv2_atom_host.cpp
+    test_lv2_rt.cpp
     test_lv2_worker.cpp
     test_clap_host.cpp
     test_vst3_host.cpp
@@ -49,7 +50,8 @@ target_compile_definitions(ampforge_tests PRIVATE
     TEST_LV2_CHUNK_BUNDLE_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_chunk.lv2/"
     TEST_LV2_ATOM_BUNDLE_DIR="${CMAKE_CURRENT_BINARY_DIR}/test_atom.lv2/"
     TEST_CLAP_PLUGIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/test_clap_gain.clap"
-    TEST_VST3_PLUGIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/test_vst3_gain.so")
+    TEST_VST3_PLUGIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/test_vst3_gain.so"
+    AMPFORGE_TEST_HOOKS)
 
 find_package(X11 REQUIRED)
 target_link_libraries(ampforge_tests PRIVATE ${CMAKE_DL_LIBS} ${X11_X11_LIB})

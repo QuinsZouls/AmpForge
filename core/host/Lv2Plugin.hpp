@@ -2,6 +2,7 @@
 
 #include "HostedPlugin.hpp"
 #include "LilvWrapper.hpp"
+#include "LockFreeQueue.hpp"
 #include "Lv2Worker.hpp"
 #include "PluginWindowX11.hpp"
 #include "lv2/urid.h"
@@ -14,7 +15,9 @@
 // Only for LV2_Atom: the sequence-size option below subtracts the atom header
 // from the buffer size, so the type has to be complete here, not just in the .cpp.
 #include "lv2/atom.h"
+#include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -40,6 +43,15 @@ public:
     // so a smaller plugin-side need just writes less.
     static constexpr uint32_t kAtomBufferBytes = 8192;
 
+    // Largest UI->DSP event the injection consumer can actually deliver:
+    // it appends an LV2_Atom_Event (time union + atom header) plus the atom
+    // body into the input sequence, whose capacity is kAtomBufferBytes -
+    // sizeof(LV2_Atom). So the whole atom (header + body) may be at most
+    // kAtomBufferBytes - sizeof(LV2_Atom_Event) bytes. Producers reject
+    // anything larger up front, so "accepted" always means "deliverable" -
+    // no event is taken into the ring only to be dropped by the consumer.
+    static constexpr uint32_t kMaxDspEventBytes = kAtomBufferBytes - sizeof(LV2_Atom_Event);
+
     Lv2Plugin();
     ~Lv2Plugin() override;
 
@@ -52,6 +64,14 @@ public:
     const std::string& getVendor() const override { return vendorName; }
     const std::string& getPluginId() const override { return pluginUri; }
 
+    // Threading contract: activate()/deactivate()/load()/unload() are NON-RT
+    // and must not run concurrently with processBlock() - the caller owns that
+    // exclusion (PluginNodeBlock's reconfigureGate + waitForAudioIdle handshake,
+    // or a not-yet-published instance). processBlock() must come from a single
+    // audio thread. cachedUrids, dspEventScratch and the ring producers rely on
+    // this: they are plain members, legal only because of that handshake.
+    // activate() also fills cachedUrids; uiWriteFunction falls back to the
+    // URID map if a UI is ever opened before activation (non-RT, allowed).
     bool activate(double sampleRate, uint32_t maxBlockSize) override;
     void deactivate() override;
 
@@ -68,6 +88,12 @@ public:
     uint32_t workerRequestsScheduled() const { return worker.requestsScheduled(); }
     uint32_t workerResponsesDelivered() const { return worker.responsesDelivered(); }
     uint32_t workerFailedWork() const { return worker.failedWork(); }
+
+    // Event-drop diagnostics (see the counters): how many UI-bound atoms,
+    // patch notifications and DSP-bound events were dropped since load.
+    uint32_t uiEventsDropped() const { return droppedUiEvents.load(std::memory_order_relaxed); }
+    uint32_t patchNotesDropped() const { return droppedPatchNotes.load(std::memory_order_relaxed); }
+    uint32_t dspEventsDropped() const { return droppedDspEvents.load(std::memory_order_relaxed); }
 
     uint32_t getParameterCount() const override;
     PluginParamInfo getParameterInfo(uint32_t index) const override;
@@ -137,15 +163,45 @@ private:
         std::string currentValue;
     };
 
-    struct QueuedAtomEvent {
+    // Fixed-size slots for the audio->UI rings (SpscRingBuffer copies by
+    // value). The audio thread must not allocate, so an event is memcpy'd
+    // into a pre-sized slot; events larger than the slot are dropped and
+    // counted (uiEventsDropped()). 1 KB covers meter/patch atoms and typical
+    // atom:Vector feeds (e.g. a 256-float spectrum); a dropped meter is
+    // refreshed by the next block anyway.
+    // Payload arrays are deliberately NOT zero-initialized: every byte is
+    // overwritten by pop()/memcpy before use, and zeroing kilobytes per block
+    // is pointless audio-thread work.
+    struct UiAtomEventSlot {
         uint32_t portIndex = 0;
         uint32_t protocol = 0;
-        std::vector<uint8_t> bytes;
+        uint32_t size = 0;
+        uint8_t bytes[1024];
+    };
+    // Patch:Set notification as raw URID + fixed char buffer: resolving the
+    // URI (uridUnmapFn takes a process-wide mutex) and any std::string work
+    // happen on the UI thread when it drains the ring, never on the audio
+    // thread that produces it. Values longer than the buffer are DROPPED (and
+    // counted), never truncated: a truncated file path persisted into
+    // writableParams would be worse than a missing update.
+    struct PatchNotificationSlot {
+        LV2_URID propUrid = 0;
+        uint32_t valueLen = 0;
+        char value[256];
     };
 
-    struct QueuedPatchNotification {
-        std::string uri;
-        std::string value;
+    // Fixed-size slot for the UI->DSP ring. Sized to the full injection bound
+    // (kAtomBufferBytes - sizeof(LV2_Atom)): everything the pre-ring code could
+    // inject still fits, so a patch:Set carrying a long IR/model file path is
+    // never dropped for size. The ring is small (8 slots) because UI->DSP
+    // events are rare user actions; the footprint matches the old 32x2KB ring.
+    // The audio thread only memcpys out of it. There is no protocol field: an
+    // injected LV2_Atom_Event carries none, so a producer-side protocol would
+    // be written and never read.
+    struct DspAtomEventSlot {
+        uint32_t portIndex = 0;
+        uint32_t size = 0;
+        uint8_t bytes[kAtomBufferBytes - sizeof(LV2_Atom)];
     };
 
     std::string pluginUri;
@@ -201,16 +257,59 @@ private:
     std::unique_ptr<ModWebGuiState> modWebGui;
 
     bool uiOpen = false;
+
+    // The ONLY UI state the audio thread reads. uiOpen/uiDescriptor/modWebGui
+    // are plain members the UI thread mutates, and closeUI() dlclose's the
+    // descriptor's library - reading them from processBlock() would be a data
+    // race and a potential use-after-unmap. Both flags are stored release and
+    // loaded acquire:
+    //  - nativeUiAttached: a native binary UI is open (its idleUI drain runs).
+    //    Set as the LAST step of a successful openBinaryUI(), cleared as the
+    //    FIRST step of closeUI(), before cleanup/dlclose.
+    //  - patchSinkOpen: a MOD WebKit GUI is open to drain patch notifications.
+    //    Set/cleared at the same points of openModWebUI()/closeUI().
+    // A block that sees a flag true just before the UI goes away pushes into a
+    // ring nobody drains - harmless: the ring fills and drops, and the next
+    // openUI() starts with whatever is left (same semantics as before).
+    std::atomic<bool> nativeUiAttached{false};
+    std::atomic<bool> patchSinkOpen{false};
+
     bool uiClosedByPlugin = false;
     uint32_t uiWidth = 860;
     uint32_t uiHeight = 600;
 
     std::vector<float> lastUiControlValues;
     std::vector<float> lastUiControlOutValues;
-    mutable std::mutex atomEventMutex;
-    std::vector<QueuedAtomEvent> pendingDspAtomEvents;
-    std::vector<QueuedAtomEvent> pendingUiAtomEvents;
-    std::vector<QueuedPatchNotification> pendingPatchNotifications;
+    // Fixed-capacity rings: ~162 KB of member arrays per instance (64x1036 +
+    // 128x264 + 8x8192) - always heap-allocate Lv2Plugin (make_unique), never
+    // put it on the stack. processBlock() also holds ~9 KB of slot locals on
+    // the audio stack per call, fine for any normal audio thread stack.
+    // The rings are deliberately NEVER reset (SpscRingBuffer has no clear()):
+    // a reset from activate() would race the idleUI consumer, which is not
+    // covered by the reconfigure gate. Leftover events drain on the next
+    // idleUI or are dropped when full - both harmless.
+    //
+    // Producer = UI thread(s) (uiWriteFunction / enqueuePatch*), consumer =
+    // audio thread (processBlock injection). SPSC: producers serialise with
+    // dspQueueProducerMutex; the audio consumer never locks. 8 slots of the
+    // full injection bound: same footprint as the old 32x2KB ring, and UI->DSP
+    // events are rare user actions.
+    SpscRingBuffer<DspAtomEventSlot, 8> pendingDspAtomEvents;
+    // Serialises UI-side pushes only (see above). Never taken on the audio
+    // thread, so it cannot stall processBlock().
+    std::mutex dspQueueProducerMutex;
+    // Audio->UI rings: producer = audio thread (processBlock harvest),
+    // consumer = UI thread (idleUI); lock-free, no mutex needed.
+    SpscRingBuffer<UiAtomEventSlot, 64> pendingUiAtomEvents;
+    SpscRingBuffer<PatchNotificationSlot, 128> pendingPatchNotifications;
+
+    // Drop diagnostics: events a ring could not take (full) or a payload that
+    // did not fit its slot. Relaxed atomics - fetch_add is lock-free and RT
+    // safe, and these are reports, never inputs (same reasoning as the worker
+    // counters). They make "the UI never showed my change" diagnosable.
+    std::atomic<uint32_t> droppedUiEvents{0};
+    std::atomic<uint32_t> droppedPatchNotes{0};
+    std::atomic<uint32_t> droppedDspEvents{0};
 
     void discoverUIs();
     bool openBinaryUI(uintptr_t parentWindow);
@@ -316,6 +415,29 @@ private:
     // Map `uri` to its process-wide stable URID (0 on failure).
     LV2_URID mapUrid(const char* uri) const;
 
+    // URIDs resolved once per activation (non-RT) so processBlock() never
+    // touches the process-wide URID map: uridMapFn() takes a mutex and builds
+    // a temporary std::string, neither of which is realtime safe. The map is
+    // referentially transparent for the process lifetime, so a value cached
+    // at activate() stays valid for every run() of that activation.
+    struct CachedUrids {
+        LV2_URID atomObject = 0;
+        LV2_URID atomBlank = 0;
+        LV2_URID atomString = 0;
+        LV2_URID atomPath = 0;
+        LV2_URID atomUri = 0;
+        LV2_URID atomFloat = 0;
+        LV2_URID atomInt = 0;
+        LV2_URID atomBool = 0;
+        LV2_URID atomUridType = 0;
+        LV2_URID patchSet = 0;
+        LV2_URID patchProp = 0;
+        LV2_URID patchVal = 0;
+        LV2_URID eventXfer = 0;
+        LV2_URID atomTransfer = 0;
+    };
+    CachedUrids cachedUrids;
+
     // Port indices
     std::vector<uint32_t> audioInPorts;
     std::vector<uint32_t> audioOutPorts;
@@ -331,6 +453,10 @@ private:
     std::vector<uint32_t> atomOutPorts;
     std::vector<std::vector<uint8_t>> atomInBuffers;
     std::vector<std::vector<uint8_t>> atomOutBuffers;
+    // Audio-thread-only scratch for building an LV2_Atom_Event during DSP
+    // event injection. Reserved once in activate() so processBlock() never
+    // allocates; only the audio thread touches it, so it needs no lock.
+    std::vector<uint8_t> dspEventScratch;
 
     // Fallback buffer for ports we do not recognise (legacy ev:EventPort, a port
     // with no direction, an extension port type). Handing a plugin a NULL port
@@ -348,6 +474,51 @@ private:
     std::vector<std::vector<float>> outBuffers;
 
     void discoverPorts();
+
+#ifdef AMPFORGE_TEST_HOOKS
+public:
+    // Test seams (ampforge_tests only; the product library is built without
+    // the define). They let the RT tests drive the harvest and injection
+    // paths without a real UI / X11 display. The block adds ONLY inline
+    // member functions - no data members, no virtuals - so sizeof(Lv2Plugin)
+    // and the layout are identical with and without it, which is what keeps
+    // the two definitions link-compatible in practice.
+    void testSetNativeUiAttached(bool v) { nativeUiAttached.store(v, std::memory_order_release); }
+    void testSetPatchSinkOpen(bool v) { patchSinkOpen.store(v, std::memory_order_release); }
+    size_t testUiRingSize() const { return pendingUiAtomEvents.size(); }
+    size_t testPatchRingSize() const { return pendingPatchNotifications.size(); }
+    size_t testDspRingSize() const { return pendingDspAtomEvents.size(); }
+    // Pop one slot; ok=false when the ring was empty (the returned slot is
+    // then unspecified). The slot types are private - callers use auto.
+    UiAtomEventSlot testPopUiEvent(bool& ok) {
+        UiAtomEventSlot slot;
+        ok = pendingUiAtomEvents.pop(slot);
+        return slot;
+    }
+    PatchNotificationSlot testPopPatchNote(bool& ok) {
+        PatchNotificationSlot note;
+        ok = pendingPatchNotifications.pop(note);
+        return note;
+    }
+    // Producer-side push, exactly like uiWriteFunction (UI thread in prod),
+    // including the drop counting - the tests assert on those counters.
+    bool testPushDspEvent(uint32_t portIndex, const void* bytes, uint32_t size) {
+        DspAtomEventSlot slot;
+        if (size > kMaxDspEventBytes) {
+            droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        slot.portIndex = portIndex;
+        slot.size = size;
+        std::memcpy(slot.bytes, bytes, size);
+        std::lock_guard<std::mutex> lock(dspQueueProducerMutex);
+        if (!pendingDspAtomEvents.push(slot)) {
+            droppedDspEvents.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        return true;
+    }
+#endif
 };
 
 } // namespace ampforge
